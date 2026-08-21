@@ -1,10 +1,40 @@
 # CoEvoAD
 
-Official implementation of **"Co-Evolutionary Prompt Optimization with Cross-Category Transfer for Zero-Shot Anomaly Detection"** (EMNLP 2026).
+> [**EMNLP 2026**] **Co-Evolutionary Prompt Optimization with Cross-Category Transfer for Zero-Shot Anomaly Detection**
+>
+> Official implementation. A paper link will be added once the ACL Anthology version is online.
 
-CoEvoAD searches for interpretable anomaly-detection rules directly in discrete natural language, using a role-separated co-evolutionary search over normal/abnormal prompt populations. Candidate rules are selected by a **Cross-Category Transfer Objective (CCTO)**, which scores each candidate by held-out performance across *source* categories only. No target-domain image, label, or metric is used at any point before final evaluation.
+![framework](figures/overview.png)
+
+## Table of Contents
+
+* [📢 Updates](#updates)
+* [📖 Introduction](#introduction)
+* [🔧 Setup](#setup)
+* [📊 Dataset Preparation](#dataset-preparation)
+* [🚀 Train](#train)
+* [🧪 Test](#test)
+* [📈 Main Results](#main-results)
+* [🎨 Visualization](#visualization)
+* [⬇️ Download Weights](#download-weights)
+* [🙏 Third-Party Code](#third-party-code)
+* [🔗 Citation](#citation)
+* [📜 License](#license)
+
+## Updates
+
+- **2026-08**: Code released.
+- **2026-08**: The paper is accepted to **EMNLP 2026** (main conference).
+
+## Introduction
+
+Zero-shot anomaly detection (ZSAD) has gained significant attention for its practical value in industrial inspection. Recently, CLIP-based approaches have been widely adopted in ZSAD due to their strong vision-language generalization capabilities. However, existing methods commonly employ continuous prompt embeddings for prompt optimization and encode semantics in latent vectors, which lack interpretability and scalability. To this end, we propose CoEvoAD, a co-evolutionary framework for discrete prompt selection. CoEvoAD performs prompt search in the discrete natural-language space using an evolutionary algorithm. Candidate prompts are iteratively generated, evaluated, and selected throughout population evolution, thus preserving the interpretability and composability of natural language. Furthermore, we introduce a Cross-Category Transfer Objective (CCTO), which treats held-out source categories as proxies for unseen categories and scores prompt rules based on their estimated cross-category transferability, effectively improving cross-category generalization. Extensive experiments are conducted to validate the effectiveness of CoEvoAD, and the results show that it achieves state-of-the-art performance across multiple anomaly detection datasets.
+
+A note on the protocol this repository enforces: candidate rules are selected by CCTO using held-out performance across *source* categories only. No target-domain image, label, or metric is used at any point before final evaluation.
 
 ## Setup
+
+Create a new conda environment and install the required packages:
 
 ```bash
 conda create -n coevoad python=3.9
@@ -18,6 +48,8 @@ pip install -r requirements.txt
 
 Note: `imgaug` requires `numpy < 2.0`, which is why numpy is pinned to `1.26.3`.
 
+Experiments in the paper are conducted on a single NVIDIA RTX 4090.
+
 Then download the CLIP ViT-L/14@336px backbone (about 900 MB) to the default path the scripts expect:
 
 ```bash
@@ -28,9 +60,38 @@ wget -O pretrained_weight/ViT-L-14-336px.pt \
 
 If you keep the weight somewhere else, pass `--pretrained_path` to every command below. The matching model config (`open_clip_local/model_configs/ViT-L-14-336.json`) already ships with this repo.
 
-## Dataset Structure
+## Dataset Preparation
 
-The code reads a normalized layout, not the raw archives as distributed on the dataset websites:
+**1. Download the original datasets to any desired path:**
+
+- **MVTec-AD**: https://www.mvtec.com/company/research/datasets/mvtec-ad
+- **VisA**: [VisA_20220922.tar](https://amazon-visual-anomaly.s3.us-west-2.amazonaws.com/VisA_20220922.tar) (from [amazon-science/spot-diff](https://github.com/amazon-science/spot-diff))
+
+The converter expects the official release layouts:
+
+```
+path1                                path2
+├── mvtec                            ├── visa
+    ├── bottle                           ├── candle
+        ├── train                            ├── Data
+            ├── good                             ├── Images
+        ├── test                                     ├── Anomaly
+            ├── good                                 ├── Normal
+            ├── anomaly1                         ├── Masks
+        ├── ground_truth                             ├── Anomaly
+            ├── anomaly1                     ├── split_csv
+                                                 ├── 1cls.csv
+```
+
+**2. Standardize the datasets and generate the meta files.**
+
+`dataset/make_dataset.py` converts the official releases into the normalized layout the code reads. Edit the `src` entries in `datasets_config` at the bottom of that file to point at your downloaded archives, then run it *from the `dataset/` directory* — its `des` paths are relative to it:
+
+```bash
+cd dataset && python make_dataset.py && cd ..
+```
+
+The same `datasets_config` also carries converter entries for the external targets used in the paper (BTAD, KSDD2, DAGM, RSDD) and more; enable the entries you need. The resulting normalized layout:
 
 ```
 dataset/mvisa/data/
@@ -51,12 +112,6 @@ dataset/mvisa/data/
 ```
 
 `dataset/make_meta.py` relies on two naming constraints in this layout: every anomalous image has a mask under `ground_truth/<defect>/` with the **same basename**, and masks are `.png` (an image `x.bmp` pairs with a mask `x.png`).
-
-**Converting the raw datasets.** `dataset/make_dataset.py` converts the official releases into the layout above. Edit the `src` entries in `datasets_config` at the bottom of that file to point at your downloaded archives, then run it *from the `dataset/` directory* — its `des` paths are relative to it:
-
-```bash
-cd dataset && python make_dataset.py && cd ..
-```
 
 **Generating the meta files.** Edit `dataset_list` at the bottom of `dataset/make_meta.py`, which defaults to `["DTD"]`:
 
@@ -87,6 +142,13 @@ python train_two_stage.py \
   --source_only_validation --stage1_only \
   --seed 111 --device_id 0
 ```
+
+Key parameters:
+
+- `--dataset`: the source training dataset (`visa` or `mvtec`); the opposite dataset is the unseen target at test time.
+- `--source_only_validation`: validate on held-out source categories instead of the legacy cross-domain validation set. **Required — see the warning below.**
+- `--stage1_only`: stop after prompt-bank training; the rule search runs separately in Step 2.
+- `--eval_every`: run full validation every N epochs.
 
 > **`--source_only_validation` is required.** It is off by default, and without it validation runs on the *opposite* dataset — training on VisA validates on MVTec. Those target-domain metrics then drive best-checkpoint selection and early stopping, which breaks the zero-shot protocol this work is about.
 
@@ -121,6 +183,16 @@ python optimize_universal.py \
   --seed 111 --no_game_metrics --device_id 0
 ```
 
+Key parameters:
+
+- `--stage2_only`: skip scorer training and run only the rule search on the frozen checkpoint from Step 1.
+- `--evo_population`, `--evo_generations`, `--evo_topk`: population size N, search generations G, and elites carried per generation.
+- `--use_coevo_prompt`, `--coevo_pair_k`: role-separated co-evolution over normal/abnormal rule populations, with K sampled partners when scoring rule pairs.
+- `--ccto`: enable the Cross-Category Transfer Objective (held-out source categories as proxies for unseen categories).
+- `--ccto_alpha`: own-category weight in the CCTO fitness (cross-category weight is 1 − α).
+- `--ccto_cross_agg bottomk`, `--ccto_bottomk`: aggregate cross-category scores by averaging the k lowest-scoring held-out categories.
+- `--ccto_batches`: max eval batches per held-out category (keeps the search tractable).
+
 This writes the searched rules to `./my_exps/coevo_visa/evo_prompt_cache.json`.
 
 ## Test
@@ -148,7 +220,49 @@ python test_universal_supp.py \
   --seed 111 --device_id 0
 ```
 
+Key parameters:
+
+- `--dataset`: the target dataset to evaluate (the opposite of the training source).
+- `--evo_rules_path`: the rule cache written by Step 2.
+- `--enable_semantic_fallback`, `--semantic_fallback_min_sim`, `--semantic_fallback_min_margin`: frozen source-only semantic routing for unseen category names, with its cosine-similarity and margin thresholds.
+- `--enable_template_transfer`: template-transfer routing for categories without a semantic match.
+- `--pixel_sigma`: Gaussian sigma for smoothing pixel-level anomaly maps.
+
 For the reverse direction (MVTec → VisA), swap `visa` and `mvtec` in the commands above.
+
+## Main Results
+
+CoEvoAD is evaluated under strict cross-dataset transfer: the scorer is trained on a source dataset and evaluated on target datasets without target-domain images, labels, or supervision. The two primary transfer directions are VisA → MVTec-AD and MVTec-AD → VisA; BTAD, KSDD2, DAGM, and RSDD serve as external industrial targets under the same source-only protocol. Numbers below are from the paper; baseline numbers are taken from the original papers or their official codebases where available. Bold marks the best result, and "--" marks entries not reported by the original paper.
+
+**Image-level comparison (AUROC / AP, %):**
+
+| Dataset | WinCLIP (CVPR'23) | AnomalyCLIP (ICLR'24) | AdaCLIP (ECCV'24) | Bayes-PFL (CVPR'25) | MRAD (ICLR'26) | CoEvoAD (Ours) |
+|---|---|---|---|---|---|---|
+| MVTec-AD | 91.8 / 95.1 | 91.5 / 96.2 | 92.0 / 96.4 | 92.3 / 96.7 | **94.0** / **97.4** | 93.4 / 96.8 |
+| VisA | 78.1 / 77.5 | 82.1 / 85.4 | 83.0 / 84.9 | 87.0 / 89.2 | 85.7 / 88.3 | **87.4** / **89.7** |
+| BTAD | 83.3 / 84.1 | 89.1 / 91.1 | 91.6 / 92.4 | 93.2 / **96.5** | 92.4 / 94.2 | **94.4** / 96.1 |
+| KSDD2 | 93.5 / 77.9 | 92.1 / 77.8 | 95.9 / 95.9 | 97.3 / 97.9 | 95.1 / 88.9 | **97.4** / **97.9** |
+| DAGM | 89.6 / 90.4 | 95.6 / 94.6 | 96.5 / 95.7 | 97.7 / 97.0 | **98.4** / **98.6** | 98.2 / 97.6 |
+| RSDD | 85.3 / 65.3 | 73.5 / 55.0 | 89.1 / 70.8 | 94.1 / 92.3 | -- / -- | **98.9** / **98.9** |
+| **Mean** | 86.9 / 81.7 | 87.3 / 83.4 | 91.4 / 89.4 | 93.6 / 94.9 | -- / -- | **95.0** / **96.2** |
+
+**Pixel-level comparison (AUROC / PRO, %):**
+
+| Dataset | WinCLIP (CVPR'23) | AnomalyCLIP (ICLR'24) | AdaCLIP (ECCV'24) | Bayes-PFL (CVPR'25) | MRAD (ICLR'26) | CoEvoAD (Ours) |
+|---|---|---|---|---|---|---|
+| MVTec-AD | 85.1 / 64.6 | 91.1 / 81.4 | 86.8 / 33.8 | 91.8 / 87.4 | **93.0** / 86.8 | 92.2 / **87.9** |
+| VisA | 79.6 / 56.8 | 95.5 / 87.0 | 95.1 / 71.3 | 95.6 / 88.9 | **95.9** / 88.0 | 95.8 / **89.4** |
+| BTAD | 71.4 / 32.8 | 93.3 / 69.3 | 87.7 / 17.1 | 93.9 / 76.6 | **95.4** / 72.8 | 94.7 / **81.9** |
+| KSDD2 | 97.9 / 91.2 | 99.1 / 85.6 | 99.4 / 92.7 | 96.1 / 70.8 | 98.9 / 95.6 | **99.6** / **98.5** |
+| DAGM | 83.2 / 55.4 | 99.1 / 93.6 | 97.0 / 40.9 | 99.3 / 98.0 | 97.4 / 90.3 | **99.5** / **98.3** |
+| RSDD | 95.1 / 75.4 | 99.1 / 92.0 | 99.5 / 50.5 | 99.6 / 98.0 | -- / -- | **99.8** / **99.0** |
+| **Mean** | 85.4 / 62.7 | 96.2 / 84.8 | 94.3 / 51.1 | 96.1 / 86.6 | -- / -- | **96.9** / **92.5** |
+
+## Visualization
+
+Anomaly maps on MVTec-AD and VisA categories, compared with ground truth and baseline methods:
+
+![qualitative](figures/qualitative_comparison.png)
 
 ## Download Weights
 
@@ -164,7 +278,7 @@ This repository builds on the following MIT-licensed projects. Please comply wit
 - **[AnomalyCLIP](https://github.com/zqhang/AnomalyCLIP)** — components under `models/external/anomalyclip/`.
 - **[OpenAI CLIP](https://github.com/openai/CLIP)** and **[open_clip](https://github.com/mlfoundations/open_clip)** — tokenizer and model configs.
 
-## About
+## Citation
 
 Questions and issues are welcome via GitHub Issues, or contact 24281153@bjtu.edu.cn.
 
@@ -183,3 +297,7 @@ If you find this work useful, please cite:
 
 The entry above is a placeholder; it will be replaced once the paper appears in
 the ACL Anthology.
+
+## License
+
+The code in this repository is licensed under the [MIT license](LICENSE).
