@@ -1,16 +1,17 @@
 """
 Co-evolutionary EvoPrompt Optimizer (A-lite)
 
-协同进化：Normal 和 Abnormal prompts 联合优化
+Co-evolution: joint optimization of normal and abnormal prompts.
 
-核心创新：
-1. 同时进化两个种群（normal, abnormal）
-2. 适应度函数考虑配对的 AUROC + 分支间对比度（可选一致性）：Fitness = α*AUROC + β*Contrast (+ γ*Consistency)
-3. 轻量级实现：先各算一次 scoring，对比分数只用缓存特征（无额外图像推理）
-4. 每个 normal 只与 K 个 abnormal 配对，避免 O(N×M) 爆炸
+Key ideas:
+1. Evolve two populations (normal, abnormal) simultaneously.
+2. Fitness combines paired AUROC with inter-branch contrast (consistency optional):
+   Fitness = alpha*AUROC + beta*Contrast (+ gamma*Consistency)
+3. Lightweight: score each branch once, then derive contrast from cached features only
+   (no extra image inference).
+4. Each normal is paired with only K abnormals, avoiding an O(N*M) blowup.
 
-作者：基于 EvoPrompt 扩展
-日期：2026
+Extends EvoPrompt.
 """
 
 import json
@@ -39,13 +40,13 @@ logger = logging.getLogger("optimize_universal")
 
 
 class CoEvoPromptOptimizer(EvoPromptOptimizer):
-    """协同进化的 EvoPrompt 优化器（A-lite）
+    """Co-evolutionary EvoPrompt optimizer.
 
-    :param coevo_pair_k: 每个 normal 配对的 abnormal 数量（默认 3）
-    :param coevo_alpha_auroc: AUROC 权重（默认 0.85）
-    :param coevo_beta_contrast: 对比度权重（默认 0.15）
-    :param enable_consistency_guidance: 是否启用一致性引导（默认 False）
-    :param coevo_gamma_consistency: 一致性权重（默认 0.10）
+    :param coevo_pair_k: number of abnormal prompts paired with each normal one (default 3)
+    :param coevo_alpha_auroc: weight on AUROC (default 0.85)
+    :param coevo_beta_contrast: weight on contrast (default 0.15)
+    :param enable_consistency_guidance: whether to enable consistency guidance (default False)
+    :param coevo_gamma_consistency: weight on consistency (default 0.10)
     """
 
     def __init__(
@@ -89,10 +90,10 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
         self.final_pair_selection_audit: List[Dict[str, Any]] = []
         self._warned_empty_text_feat_cache = False
 
-        print("[CoEvo] 协同进化 EvoPrompt 初始化完成")
-        print(f"  - 配对采样数 K: {coevo_pair_k}")
-        print(f"  - α (AUROC权重): {coevo_alpha_auroc}")
-        print(f"  - β (对比度权重): {coevo_beta_contrast}")
+        print("[CoEvo] co-evolutionary EvoPrompt initialized")
+        print(f"  - pairing samples K: {coevo_pair_k}")
+        print(f"  - alpha (AUROC weight): {coevo_alpha_auroc}")
+        print(f"  - beta (contrast weight): {coevo_beta_contrast}")
         print(f"  - crossover rate: {self.coevo_crossover_rate:.3f}")
         print(f"  - final pair selector: {self.coevo_final_pair_select}")
         logger.info(
@@ -101,13 +102,13 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
             self.coevo_final_pair_select,
         )
         if self.record_population_trace:
-            print("  - population trace: 启用")
+            print("  - population trace: enabled")
             logger.info("coevo_record_population_trace=True")
         if self.enable_consistency_guidance:
-            print(f"  - γ (一致性权重): {coevo_gamma_consistency}")
-            print("  - 一致性引导: 启用")
+            print(f"  - gamma (consistency weight): {coevo_gamma_consistency}")
+            print("  - consistency guidance: enabled")
         else:
-            print("  - 一致性引导: 禁用")
+            print("  - consistency guidance: disabled")
 
     def _normal_semantic_tokens(self) -> set:
         tokens = set(_NORMAL_SEMANTIC_WORDS)
@@ -294,19 +295,19 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
         return self._mutate(random.choice(elite), name, role=role)
 
     def _split_scores_result(self, result, candidates, role: str):
-        """解析 scoring_callback 返回值，仅保留 scores / consistencies 语义。"""
+        """Parse the scoring_callback return value, keeping only scores / consistencies."""
         consistencies = None
         if isinstance(result, dict):
             scores = result.get("scores", None)
             consistencies = result.get("consistencies", None)
             if scores is None:
-                raise ValueError(f"scoring_callback dict 缺少 'scores' 字段，role={role}")
+                raise ValueError(f"scoring_callback dict is missing the 'scores' field, role={role}")
         else:
             scores = result
 
         if len(scores) != len(candidates):
             raise ValueError(
-                f"scoring_callback 返回长度不匹配: role={role}, "
+                f"scoring_callback returned a mismatched length: role={role}, "
                 f"scores={len(scores)} vs candidates={len(candidates)}"
             )
         scores = [float(s) for s in scores]
@@ -314,7 +315,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
         if consistencies is not None:
             if len(consistencies) != len(candidates):
                 raise ValueError(
-                    f"consistencies 长度不匹配: role={role}, "
+                    f"consistencies length mismatch: role={role}, "
                     f"consistencies={len(consistencies)} vs candidates={len(candidates)}"
                 )
             consistencies = [float(c) for c in consistencies]
@@ -325,7 +326,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
         return scores, consistencies
 
     def _cosine_distance(self, feat_a, feat_b) -> float:
-        """计算余弦距离 1 - cos_sim，越大越不相似"""
+        """Cosine distance 1 - cos_sim; larger means less similar."""
         if torch is None or feat_a is None or feat_b is None:
             return 0.0
 
@@ -351,7 +352,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
         exclude: Optional[List[str]] = None,
         k: int = 3
     ) -> List[int]:
-        """多样性采样：从 pool 中选 k 个索引，兼顾分数与多样性"""
+        """Diversity sampling: pick k indices from the pool, balancing score and diversity."""
         exclude = exclude or []
         n = len(pool)
         if n <= k:
@@ -364,7 +365,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
             )
             self._warned_empty_text_feat_cache = True
 
-        # 按分数排序，并从 top 候选中随机选起点，避免总是由同一个个体主导
+        # Sort by score, then start from a random top candidate so one individual never dominates
         idx_scores = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
         top_seed_n = min(max(3, k), len(idx_scores))
         seed_idx = random.choice([idx_scores[i][0] for i in range(top_seed_n)])
@@ -381,7 +382,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                 cand = pool[idx]
                 key = (role, cand)
                 if key not in getattr(self, "text_feat_cache", {}):
-                    # 无缓存，按分数选
+                    # no cache; select by score
                     if scores[idx] > best_mmr:
                         best_mmr = scores[idx]
                         best_idx = idx
@@ -418,8 +419,9 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
     ) -> Tuple[Dict[str, float], Dict[str, float],
                Dict[str, Dict[str, float]], Dict[str, Dict[str, float]]]:
         """
-        轻量协同配对：每个 normal 只配 K 个 abnormal，用缓存算 contrast。
-        不调用 scoring_callback（已由外部各算一次 scores_n, scores_a）。
+        Lightweight co-pairing: each normal is paired with only K abnormals, and contrast
+        is computed from the cache. scoring_callback is not called here (the caller already
+        computed scores_n and scores_a once).
 
         Returns:
             (norm_n, norm_a, decomp_n, decomp_a)
@@ -448,7 +450,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
         if consistencies_a is None:
             consistencies_a = [0.5] * len(abnormal_pop)
 
-        # 多样性采样得到 abnormal 索引
+        # diversity-sample the abnormal indices
         abn_indices = self._diversity_sampling(
             abnormal_pop, adjusted_scores_a, "abnormal", k=k
         )
@@ -459,8 +461,8 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                 a_prompt = abnormal_pop[ai]
                 a_feat = cache.get(("abnormal", a_prompt))
 
-                # 核心惩罚：normal 与 abnormal prompt 相同时直接给极低分，
-                # 让 GA 自然淘汰，而不是靠字符串层面硬编码规则
+                # Core penalty: give a very low score when the normal and abnormal prompts are
+                # identical, letting the GA weed them out instead of hard-coding string rules
                 if n_prompt.strip() == a_prompt.strip():
                     pair_score = -1.0
                     a_term = 0.0
@@ -509,7 +511,8 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                         }
                     )
 
-        # 归一化：若某候选未被采样配对，回退到该候选原始 AUROC 分数，避免被错误压成 0
+        # Normalization: if a candidate was never sampled for pairing, fall back to its raw
+        # AUROC score so it is not wrongly driven to 0
         norm_n: Dict[str, float] = {}
         decomp_n: Dict[str, Dict[str, float]] = {}
         for i, p in enumerate(normal_pop):
@@ -727,9 +730,10 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
         qd_bd_names: Optional[List[str]] = None,
     ) -> Tuple[List[str], List[str]]:
         """
-        协同进化双分支优化。
+        Co-evolutionary dual-branch optimization.
 
-        关键：先各算一次 scoring（不重复调用），对比分数只用 text_feat_cache。
+        Key point: score each branch once (no repeated calls); contrast comes from
+        text_feat_cache alone.
         """
         if hasattr(self, "text_feat_cache"):
             self.text_feat_cache.clear()
@@ -759,7 +763,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
             _prev_payoff_a: Optional[float] = None
 
             for gen in range(self.generations):
-                # 1. 各算一次，不重复调用（scoring_callback 会填充 text_feat_cache）
+                # 1. Score each branch once, without repeated calls (scoring_callback fills text_feat_cache)
                 _cb_raw_n = scoring_callback(normal_pop, role="normal")
                 scores_n, consistencies_n = self._split_scores_result(
                     _cb_raw_n, normal_pop, "normal"
@@ -772,7 +776,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                 )
                 _qm_a = _cb_raw_a.get("src_metrics", []) if isinstance(_cb_raw_a, dict) else []
 
-                # 2. 轻量协同配对（只用缓存，无额外推理）
+                # 2. Lightweight co-pairing (cache only, no extra inference)
                 pair_records: List[Dict[str, Any]] = []
                 agg_n, agg_a, decomp_n, decomp_a = self._aggregate_pair_scores(
                     normal_pop, abnormal_pop, scores_n, scores_a,
@@ -800,7 +804,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                             metadata={"role": "abnormal", "name": name, "gen": gen},
                         )
 
-                # 3. 选择精英 (QD archive sampling or MMR)
+                # 3. Select elites (QD archive sampling or MMR)
                 if qd_archive_normal is not None and qd_archive_normal.size >= self.topk:
                     normal_elite = qd_archive_normal.sample_parents(k=self.topk)
                 elif hasattr(self, "text_feat_cache") and len(self.text_feat_cache) > 0:
@@ -866,7 +870,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                     bn_idx = max(range(len(normal_pop)), key=lambda i: norm_fitness_n[i])
                     ba_idx = max(range(len(abnormal_pop)), key=lambda i: norm_fitness_a[i])
                     print(
-                        f"[CoEvo] 代数 {gen+1}/{self.generations}, 类别 '{name}'"
+                        f"[CoEvo] generation {gen+1}/{self.generations}, category '{name}'"
                     )
                     if self.enable_consistency_guidance and consistencies_n is not None and consistencies_a is not None:
                         print(
@@ -881,7 +885,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                         print(f"  Normal Top1: AUROC={scores_n[bn_idx]:.4f}, Fitness={norm_fitness_n[bn_idx]:.4f}")
                         print(f"  Abnormal Top1: AUROC={scores_a[ba_idx]:.4f}, Fitness={norm_fitness_a[ba_idx]:.4f}")
 
-                # 4. 变异
+                # 4. Mutation
                 en = normal_elite if normal_elite else normal_pop[:1]
                 ea = abnormal_elite if abnormal_elite else abnormal_pop[:1]
                 op_counts_n = {"mutation": 0, "crossover": 0}
@@ -899,7 +903,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                 normal_pop = normal_elite + normal_new
                 abnormal_pop = abnormal_elite + abnormal_new
 
-                # 去重后补齐：避免种群塌缩
+                # Refill after deduplication to avoid population collapse
                 normal_pop = list(dict.fromkeys(normal_pop))
                 for _ in range(self.population_size * 3):
                     if len(normal_pop) >= self.population_size:
@@ -955,7 +959,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                     self.coevo_crossover_rate,
                 )
 
-            # 5. 最终选择（再算一次以更新缓存）
+            # 5. Final selection (score once more to refresh the cache)
             _cb_final_n = scoring_callback(normal_pop, role="normal")
             final_scores_n, final_cons_n = self._split_scores_result(
                 _cb_final_n, normal_pop, "normal-final"
@@ -1130,7 +1134,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
                     qd_archive_abnormal.coverage * 100,
                 )
 
-            # 硬约束：normal 和 abnormal 最终选择不能相同
+            # Hard constraint: the final normal and abnormal selections must differ
             if best_n.strip() == best_a.strip():
                 best_a = f"X abnormal {name}"
                 logger.warning(
@@ -1183,7 +1187,7 @@ class CoEvoPromptOptimizer(EvoPromptOptimizer):
 
 
 def build_coevo_optimizer(**kwargs) -> CoEvoPromptOptimizer:
-    """构建协同进化优化器"""
+    """Build the co-evolutionary optimizer."""
     game_flag = kwargs.pop("game_metrics_enable", False)
     llm_enabled = kwargs.pop("llm_mutation_enabled", False)
     llm_model_id = kwargs.pop("llm_model_id", "")

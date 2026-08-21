@@ -22,7 +22,7 @@ class Orthogonal_Loss(nn.Module):
         Loss_abnormal_text = self.compute_orthogonal_loss(embeddings[:,args.prompt_num:,:])
         orthogonal_loss = Loss_normal_text + Loss_abnormal_text
 
-        # Inter-role margin: normal 和 abnormal 的 mean embedding 应该分离
+        # Inter-role margin: mean embeddings of normal and abnormal should stay separated
         margin_target = float(getattr(args, "inter_role_margin", 0.3))
         margin_weight = float(getattr(args, "inter_role_margin_weight", 0.5))
         normal_mean = F.normalize(embeddings[:, :args.prompt_num, :].mean(dim=1), dim=-1)
@@ -68,7 +68,7 @@ class DiceLoss(nn.Module):
 
     def forward(self, pred, target):
         target = target.float()
-        # 只计算前景通道 Dice（异常区域）。
-        # 异常检测中背景像素远多于前景，background Dice 对梯度贡献极小且噪声大。
+        # Only compute Dice on the foreground channel (anomalous regions).
+        # Background pixels far outnumber foreground here, so background Dice adds little gradient and much noise.
         loss = self.compute_loss(pred[:, 1, :, :], target.clone())
         return loss

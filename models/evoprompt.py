@@ -1,16 +1,16 @@
 """
-EvoPrompt 两阶段优化器
+EvoPrompt two-stage optimizer.
 
-阶段 1: 训练 deterministic prompt-bank 模型（或使用已训练好的模型）
-    - 训练 prompt embedding (prompt_context, prompt_state)
-    - 训练其他可训练参数
+Stage 1: train the deterministic prompt-bank model (or reuse an already-trained one)
+    - train the prompt embeddings (prompt_context, prompt_state)
+    - train the remaining trainable parameters
 
-阶段 2: 优化文本 Prompt（模型参数冻结）
-    - 冻结所有模型参数
-    - 从训练集选一个子集
-    - 用遗传算法在子集上找最优 prompt
-    - 不训练，只评估哪个 prompt 最好
-    - 保存优化后的 prompt 规则
+Stage 2: optimize the textual prompts (model parameters frozen)
+    - freeze all model parameters
+    - take a subset of the training set
+    - search for the best prompt on that subset with a genetic algorithm
+    - no training; only evaluation of which prompt performs best
+    - save the optimized prompt rules
 """
 
 import logging
@@ -30,7 +30,8 @@ try:
 except ImportError:
     torch = None
 
-# 正常语义词集合：用于过滤 abnormal 角色的形容词/模板，防止生成含正常语义的缺陷 prompt
+# Normal-semantics vocabulary: filters adjectives/templates on the abnormal role so that
+# defect prompts do not end up carrying normal semantics
 _NORMAL_SEMANTIC_WORDS = frozenset({
     "typical", "standard", "normal", "common", "clean", "pristine",
     "flawless", "perfect", "regular", "pure", "natural",
@@ -80,14 +81,14 @@ def build_route_audit_payload(
 
 
 class EvoPromptOptimizer:
-    """EvoPrompt 文本级优化器（不做任何embedding/交叉注意力融合，仅返回替换后的文本）。
+    """Text-level EvoPrompt optimizer (no embedding or cross-attention fusion; returns substituted text only).
 
-    :param population_size: 初始种群大小
-    :param generations: 迭代代数
-    :param topk: 甄选保留的候选数
-    :param templates: 模板池（必须保留 'X ' 前缀以兼容现有 TextEncoder 在 'X' 处插入视觉token的逻辑）
-    :param adjectives: 形容词池（可为空；仅作为变异来源）
-    :param lambda_diversity: MMR 多样性权重（0.0-1.0，0.0 表示仅按分数选择）
+    :param population_size: initial population size
+    :param generations: number of generations
+    :param topk: number of candidates kept after selection
+    :param templates: template pool (the 'X ' prefix must be kept, since the existing TextEncoder inserts visual tokens at 'X')
+    :param adjectives: adjective pool (may be empty; used only as a mutation source)
+    :param lambda_diversity: MMR diversity weight (0.0-1.0; 0.0 selects by score alone)
     """
 
     def __init__(
@@ -106,10 +107,10 @@ class EvoPromptOptimizer:
         evo_random_search_seed: Optional[int] = None,
         evo_mutation_ops: Optional[Any] = None,
     ) -> None:
-        # 标记"仅文本替换"模式，供 forward_ensemble 分支判断用
+        # Marks text-substitution-only mode, checked by the forward_ensemble branch
         self.text_replace_only: bool = True
 
-        # 增强的模板池（参考 EAOT 论文，增加多样性）
+        # Enlarged template pool (following EAOT, for more diversity)
         self.templates = templates or [
             "X {name}",
             "X the {name}",
@@ -128,7 +129,7 @@ class EvoPromptOptimizer:
             "X a view of {name}",
         ]
         
-        # normal 专用模板（更丰富的表达）
+        # normal-specific templates (richer phrasing)
         self.normal_templates = [
             "X normal {name}",
             "X typical {name}",
@@ -142,7 +143,7 @@ class EvoPromptOptimizer:
             "X regular {name}",
         ]
         
-        # abnormal 专用模板（更丰富的表达）
+        # abnormal-specific templates (richer phrasing)
         self.abnormal_templates = [
             "X abnormal {name}",
             "X defective {name}",
@@ -156,29 +157,29 @@ class EvoPromptOptimizer:
             "X defect in {name}",
         ]
         
-        # 增强的形容词池（更丰富的描述词）
+        # Enlarged adjective pool (richer descriptors)
         self.adjectives = adjectives or [
             "plain", "typical", "simple", "clear", "standard", 
             "common", "general", "regular", "basic", "ordinary",
             "pure", "natural", "original", "authentic", "genuine"
         ]
         
-        # normal 专用形容词（更多样化）
+        # normal-specific adjectives (more varied)
         self.normal_adjectives = [
             "normal", "clean", "typical", "standard", "defect-free", 
             "perfect", "flawless", "pristine", "intact", "unblemished",
             "good", "fine", "healthy", "proper", "regular"
         ]
         
-        # abnormal 专用形容词（更多样化）
+        # abnormal-specific adjectives (more varied)
         self.abnormal_adjectives = [
             "abnormal", "defective", "damaged", "flawed", "anomalous",
             "faulty", "broken", "irregular", "imperfect", "blemished",
             "bad", "poor", "corrupted", "deteriorated", "compromised"
         ]
 
-        # ── 类别无关模板（Category-Agnostic Anomaly Prompt, CAAP）──
-        # 不含 {name}，跨域迁移时不依赖目标类别名
+        # -- Category-agnostic templates (Category-Agnostic Anomaly Prompt, CAAP) --
+        # No {name} placeholder, so cross-domain transfer does not depend on the target category name
         self.agnostic_normal_templates = [
             "X a photo of a flawless object",
             "X a clean surface without defects",
@@ -200,7 +201,7 @@ class EvoPromptOptimizer:
             "X irregular texture with contamination",
         ]
 
-        # ── 细粒度异常类型模板（Fine-grained Anomaly Types）──
+        # -- Fine-grained anomaly-type templates --
         # Part C: Structural, Surface, Textural
         self.anomaly_type_templates = {
             "structural": [
@@ -222,7 +223,7 @@ class EvoPromptOptimizer:
                 "X abnormal textural variation",
             ]
         }
-        # 将细粒度模板扩展到异常侧的无类模板池中
+        # Extend the fine-grained templates into the category-agnostic pool on the abnormal side
         for templates in self.anomaly_type_templates.values():
             self.agnostic_abnormal_templates.extend(templates)
 
@@ -231,11 +232,11 @@ class EvoPromptOptimizer:
         self.topk = topk
         self.lambda_diversity = lambda_diversity
         
-        # 缓存：键为 (role, name) 元组，值为优化后的 prompt
-        # role 可以是 "normal", "abnormal", "shared" 或 None（默认为 "shared"）
+        # Cache: keyed by the (role, name) tuple, valued by the optimized prompt
+        # role may be "normal", "abnormal", "shared", or None (defaults to "shared")
         self.cache: Dict[Tuple[str, str], str] = {}
 
-        # 规则元信息：用于 zero-shot safe gate / source-only diagnostic
+        # Rule metadata: used by the zero-shot safe gate / source-only diagnostics
         self.rule_metadata: Dict[Tuple[str, str], Dict[str, Any]] = {}
 
         # Equal-budget prompt-search controls. Defaults preserve the original
@@ -246,15 +247,15 @@ class EvoPromptOptimizer:
         self._custom_mutation_ops = evo_mutation_ops is not None and str(evo_mutation_ops).strip() != ""
         self.evo_mutation_ops = self._parse_mutation_ops(evo_mutation_ops)
         
-        # 文本特征缓存（供 MMR 多样性选择使用）
-        # 键为 (role, candidate) 元组，值为归一化的文本特征向量
+        # Text-feature cache (used by MMR diversity selection)
+        # keyed by the (role, candidate) tuple, valued by the normalized text-feature vector
         self.text_feat_cache: Dict[Tuple[str, str], any] = {}
 
-        # 推理阶段缓存解析开关（默认关闭，不影响训练/优化流程）
+        # Inference-time cache-resolution switch (off by default; does not affect training/optimization)
         self.inference_resolve_missing_from_cache: bool = False
         self.inference_allow_role_fallback: bool = False
 
-        # LLM mutation state (懒加载)
+        # LLM mutation state (lazily loaded)
         self.llm_model_id = llm_model_id
         self.llm_mutation_max_tokens = llm_mutation_max_tokens
         self._llm_model = None
@@ -269,11 +270,11 @@ class EvoPromptOptimizer:
         else:
             self.llm_mutation_enabled = llm_mutation_enabled
 
-        # Template Transfer 配置
+        # Template-transfer configuration
         self.enable_template_transfer: bool = False
         self._transfer_templates_cache: Optional[Dict[str, Dict[str, Any]]] = None
 
-        # 语义回退（CLIP 文本相似度）配置
+        # Semantic-fallback configuration (CLIP text similarity)
         self.enable_semantic_fallback: bool = False
         self.semantic_template: str = "a photo of {}"
         self.semantic_embed_fn: Optional[Callable[[List[str]], Any]] = None
@@ -315,13 +316,13 @@ class EvoPromptOptimizer:
         enable_semantic_fallback: bool = False,
         enable_template_transfer: bool = False,
     ) -> None:
-        """配置推理阶段对缺失类别的缓存解析策略。"""
+        """Configure how missing categories are resolved from the cache at inference time."""
         self.inference_resolve_missing_from_cache = bool(enable)
         self.inference_allow_role_fallback = bool(allow_role_fallback)
         self.enable_semantic_fallback = bool(enable_semantic_fallback)
         self.enable_template_transfer = bool(enable_template_transfer)
         if enable_template_transfer:
-            self._transfer_templates_cache = None  # 触发重新提取
+            self._transfer_templates_cache = None  # force re-extraction
 
     def set_semantic_embedder(
         self,
@@ -330,7 +331,7 @@ class EvoPromptOptimizer:
         min_similarity: float = 0.5,
         min_margin: float = 0.0,
     ) -> None:
-        """设置语义回退使用的文本编码函数（通常接 CLIP encode_text）。"""
+        """Set the text-encoding function used by semantic fallback (usually CLIP encode_text)."""
         self.semantic_embed_fn = embed_fn
         self.semantic_template = template or "a photo of {}"
         self.semantic_min_similarity = float(min_similarity)
@@ -374,7 +375,7 @@ class EvoPromptOptimizer:
         try:
             text = self.semantic_template.format(key)
             feat = self.semantic_embed_fn([text])
-            # 兼容 [D] 或 [1, D]
+            # accept either [D] or [1, D]
             if isinstance(feat, torch.Tensor) and feat.ndim >= 2 and feat.shape[0] > 0:
                 feat = feat[0]
             unit = self._to_1d_unit_tensor(feat)
@@ -390,11 +391,11 @@ class EvoPromptOptimizer:
         name_candidates: List[str],
         fallback_roles: List[str],
     ) -> Optional[Tuple[Tuple[str, str], str]]:
-        """按 CLIP 文本相似度从同 role 缓存中选择最相近规则。"""
+        """Pick the closest rule from the same-role cache by CLIP text similarity."""
         if not self.enable_semantic_fallback or self.semantic_embed_fn is None or torch is None:
             return None
 
-        # 查询向量：候选别名向量均值
+        # query vector: mean of the candidate alias vectors
         q_feats = []
         for n in name_candidates:
             f = self._encode_name_semantic(n)
@@ -426,12 +427,12 @@ class EvoPromptOptimizer:
         if not candidates:
             return None
 
-        # 相似度优先，平分时按 key 字典序固定化，保证可复现。
+        # Similarity first; ties are broken by lexicographic key order for reproducibility.
         candidates.sort(key=lambda x: (-x[0], x[1]))
         best_sim, best_key, best_prompt = candidates[0]
         second_sim = candidates[1][0] if len(candidates) > 1 else None
 
-        # 语义命中置信门槛：避免将"最相近但不靠谱"的类别硬匹配上。
+        # Confidence threshold on semantic hits, so a nearest-but-unreliable category is not forced through.
         query_label = name_candidates[0] if name_candidates else "?"
         if best_sim < self.semantic_min_similarity:
             logger.warning(
@@ -458,10 +459,10 @@ class EvoPromptOptimizer:
         topk: int = 3,
         tau: float = 1.0,
     ) -> List[Tuple[Tuple[str, str], str, float]]:
-        """按 CLIP 文本相似度返回 top-k 匹配的缓存规则及原始相似度。
+        """Return the top-k cached rules matched by CLIP text similarity, with raw similarities.
 
-        返回: [(key, prompt, raw_similarity), ...]
-        `tau` 保留在签名中仅为向后兼容；实际权重在 pair 级别统一计算。
+        Returns: [(key, prompt, raw_similarity), ...]
+        `tau` is kept in the signature for backward compatibility only; the actual weights are computed uniformly at pair level.
         """
         del tau
         if not self.enable_semantic_fallback or self.semantic_embed_fn is None or torch is None:
@@ -719,10 +720,10 @@ class EvoPromptOptimizer:
         gate_threshold: float = 0.4,
         allow_role_fallback: bool = False,
     ) -> Dict[str, Any]:
-        """返回结构化 multi-source route 结果。
+        """Return a structured multi-source route result.
 
-        仅在 semantic fallback 阶段扩展 top-k 候选；exact/alias/template/shared/default
-        的优先级与旧主线保持一致。
+        Only the semantic-fallback stage expands to top-k candidates; the priority of
+        exact/alias/template/shared/default is unchanged from the previous mainline.
         """
         topk = max(1, int(topk))
         tau_safe = max(float(tau), 1e-6)
@@ -997,7 +998,7 @@ class EvoPromptOptimizer:
 
     @staticmethod
     def _shared_prompt_for_role(role: str) -> str:
-        """根据角色返回通用 shared prompt（不含类别名）。"""
+        """Return the generic shared prompt for a role (no category name)."""
         if role == "normal":
             return "X normal object"
         if role == "abnormal":
@@ -1008,37 +1009,37 @@ class EvoPromptOptimizer:
     def _adapt_prompt_to_target(
         prompt: str, src_name: str, tgt_name: str,
     ) -> Optional[str]:
-        """将 prompt 中的源域类名替换为目标域类名，保留模板结构。
+        """Replace the source-domain category name in a prompt with the target-domain one, keeping the template structure.
 
         "X the flawed hazelnut" + (hazelnut → cashew) → "X the flawed cashew"
-        对 agnostic 模板（不含类名）直接返回原 prompt。
+        Category-agnostic templates (which contain no category name) are returned unchanged.
         """
         if not src_name or not tgt_name:
             return prompt
-        # 大小写不敏感查找源域类名
+        # case-insensitive lookup of the source category name
         lower = prompt.lower()
         src_lower = src_name.lower()
         idx = lower.find(src_lower)
         if idx >= 0:
             return prompt[:idx] + tgt_name + prompt[idx + len(src_name):]
-        # 尝试下划线替换为空格再找（如 metal_nut → metal nut）
+        # retry with underscores replaced by spaces (e.g. metal_nut -> metal nut)
         src_spaced = src_lower.replace("_", " ")
         if src_spaced != src_lower:
             idx = lower.find(src_spaced)
             if idx >= 0:
                 return prompt[:idx] + tgt_name + prompt[idx + len(src_spaced):]
-        # 不含源域类名（agnostic 模板），返回原 prompt
+        # no source category name (an agnostic template): return the prompt unchanged
         return prompt
 
     def _extract_name(self, prompt: str) -> str:
-        """从 'X xxx' 取出 'xxx'。"""
+        """Extract 'xxx' from 'X xxx'."""
         p = prompt.strip()
         if p.startswith("X "):
             return p[2:].strip()
         return p
 
     def _normalize_name(self, name: str) -> str:
-        """统一类别名格式，提升规则命中率。"""
+        """Normalize the category-name format to improve rule hit rate."""
         if name is None:
             return ""
         n = str(name).strip().lower()
@@ -1047,7 +1048,7 @@ class EvoPromptOptimizer:
         return n
 
     def _candidate_names(self, name: str) -> List[str]:
-        """生成等价类别名候选（空格/下划线/连字符变体）。"""
+        """Generate equivalent category-name candidates (space / underscore / hyphen variants)."""
         base = self._normalize_name(name)
         raw = [base]
         if base:
@@ -1067,7 +1068,7 @@ class EvoPromptOptimizer:
 
     @staticmethod
     def _tokenize_prompt_text(text: str) -> List[str]:
-        """将 prompt 片段规范化为 token 序列，保留下划线/连字符词。"""
+        """Normalize a prompt fragment into a token sequence, preserving underscored/hyphenated words."""
         if text is None:
             return []
         return re.findall(r"[a-z0-9]+(?:[_-][a-z0-9]+)*", str(text).lower())
@@ -1174,7 +1175,7 @@ class EvoPromptOptimizer:
         return str(template).replace("{name}", "").strip()
 
     def _extract_descriptors(self, prompt: str, name: str) -> List[str]:
-        """提取 prompt 中相对类名的 descriptor token。"""
+        """Extract descriptor tokens from a prompt, relative to the category name."""
         name_tokens = set(self._tokenize_prompt_text(name))
         tokens = self._tokenize_prompt_text(prompt)
         out = []
@@ -1214,7 +1215,7 @@ class EvoPromptOptimizer:
         name: str,
         descriptors: Optional[List[str]] = None,
     ) -> str:
-        # 类别无关模板（不含 {name}）：直接返回，可选追加 descriptor
+        # Category-agnostic template (no {name}): return directly, optionally appending a descriptor
         if "{name}" not in template:
             if descriptors:
                 desc_phrase = " ".join(d for d in descriptors if d).strip()
@@ -1222,7 +1223,7 @@ class EvoPromptOptimizer:
                     return f"{template} {desc_phrase}".strip()
             return template.strip()
 
-        # 去重 descriptors 自身 + 排除已在模板中出现的形容词
+        # deduplicate the descriptors and drop adjectives already present in the template
         if descriptors:
             tpl_content_words = set(
                 template.replace("{name}", "").lower().split()
@@ -1393,20 +1394,20 @@ class EvoPromptOptimizer:
 
     @staticmethod
     def _extract_score_list(score_result: Any, expected_len: int) -> List[float]:
-        """兼容 List / Tuple / Dict scoring_callback 输出。"""
+        """Accept List / Tuple / Dict outputs from scoring_callback."""
         if isinstance(score_result, dict):
             scores = score_result.get("scores", None)
             if scores is None:
-                raise ValueError("scoring_callback dict 缺少 'scores' 字段")
+                raise ValueError("scoring_callback dict is missing the 'scores' field")
         elif isinstance(score_result, tuple):
             if len(score_result) == 0:
-                raise ValueError("scoring_callback tuple 为空")
+                raise ValueError("scoring_callback returned an empty tuple")
             scores = score_result[0]
         else:
             scores = score_result
         if len(scores) != expected_len:
             raise ValueError(
-                f"scoring_callback 返回长度不匹配: got {len(scores)} expected {expected_len}"
+                f"scoring_callback returned a mismatched length: got {len(scores)} expected {expected_len}"
             )
         return [float(s) for s in scores]
 
@@ -1418,23 +1419,23 @@ class EvoPromptOptimizer:
         allow_role_fallback: bool = False,
     ) -> Tuple[Optional[str], Optional[Tuple[str, str]], str]:
         """
-        仅从缓存解析 prompt，不做进化搜索。
+        Resolve prompts from the cache only; no evolutionary search.
 
-        返回: (prompt, hit_key, source)
+        Returns: (prompt, hit_key, source)
         source:
-        - exact: 直接命中 (role, name)
-        - alias: 命中等价名字或 shared 兜底
-        - semantic_fallback: 同角色下按语义最相近类别回退
-        - template_transfer: 从源域模板迁移生成目标类别 prompt
-        - shared_fallback: 语义回退未命中且模板迁移失败后退到 shared prompt
-        - role_fallback: 命中同角色下任意已有规则（跨类回退）
-        - missing: 缓存无可用规则
-        - default: 使用默认 prompt
+        - exact: direct hit on (role, name)
+        - alias: hit on an equivalent name, or the shared fallback
+        - semantic_fallback: fall back to the semantically closest category within the same role
+        - template_transfer: build the target-category prompt by transferring a source-domain template
+        - shared_fallback: fall back to the shared prompt after both semantic fallback and template transfer fail
+        - role_fallback: hit any existing rule under the same role (cross-category fallback)
+        - missing: no usable rule in the cache
+        - default: use the default prompt
         """
         role_key = role or "shared"
         name_candidates = self._candidate_names(name)
 
-        # 1) 精确/别名命中：优先 role，本角色缺失时允许 shared 兜底
+        # 1) exact / alias hit: prefer the role, allowing the shared fallback when that role is missing
         role_search = [role_key]
         if role_key != "shared":
             role_search.append("shared")
@@ -1449,7 +1450,7 @@ class EvoPromptOptimizer:
                         return self.cache[key], key, "exact"
                     return self.cache[key], key, "alias"
 
-        # 2) 语义回退：按 CLIP 文本相似度从同 role 缓存中匹配最相近类别
+        # 2) semantic fallback: match the closest category in the same-role cache by CLIP text similarity
         fallback_roles = [role_key]
         if role_key != "shared":
             fallback_roles.append("shared")
@@ -1459,9 +1460,9 @@ class EvoPromptOptimizer:
         semantic_hit = self._semantic_fallback_lookup(name_candidates, fallback_roles)
         if semantic_hit is not None:
             key, prompt = semantic_hit
-            src_name = key[1]  # 源域类名（如 "hazelnut"）
-            tgt_name = self._normalize_name(name)  # 目标域类名（如 "cashew"）
-            # 跨域时将源域类名替换为目标域类名，保留 prompt 模板结构
+            src_name = key[1]  # source category name (e.g. "hazelnut")
+            tgt_name = self._normalize_name(name)  # target category name (e.g. "cashew")
+            # for cross-domain runs, swap the source category name for the target one, keeping the template structure
             adapted = self._adapt_prompt_to_target(prompt, src_name, tgt_name)
             if adapted is not None and adapted != prompt:
                 logger.info(
@@ -1471,7 +1472,7 @@ class EvoPromptOptimizer:
                 return adapted, key, "semantic_transfer"
             return prompt, key, "semantic_fallback"
 
-        # 2.5) 模板迁移：从源域规则提取模板，套用目标类名
+        # 2.5) template transfer: extract a template from the source rules and apply the target category name
         if self.enable_template_transfer:
             template_donor = None
             semantic_seed = self._topk_semantic_fallback_lookup(
@@ -1492,8 +1493,8 @@ class EvoPromptOptimizer:
                 hit_key = (role_key, template_donor) if template_donor else None
                 return prompt, hit_key, "template_transfer"
 
-        # 2.8) 语义回退已启用但未命中（被阈值/margin 拒绝或无候选）→
-        #      若模板迁移也失败，再回退到通用 shared prompt。
+        # 2.8) semantic fallback was enabled but did not hit (rejected by threshold/margin, or no candidate):
+        #      if template transfer also fails, fall back to the generic shared prompt.
         if self.enable_semantic_fallback and self.semantic_embed_fn is not None:
             shared = self._shared_prompt_for_role(role_key)
             logger.info(
@@ -1503,7 +1504,7 @@ class EvoPromptOptimizer:
             )
             return shared, None, "shared_fallback"
 
-        # 3) 角色级回退：同角色任取一个稳定规则（仅测试阶段兜底）
+        # 3) role-level fallback: take any stable rule under the same role (test-time safety net only)
         if allow_role_fallback:
             for r in fallback_roles:
                 role_items = [
@@ -1515,26 +1516,26 @@ class EvoPromptOptimizer:
                     key, prompt = role_items[0]
                     return prompt, key, "role_fallback"
 
-        # 4) 默认回退（如果提供）
+        # 4) default fallback (if one was provided)
         if default_prompt is not None:
             return default_prompt, None, "default"
 
         return None, None, "missing"
 
     def _init_population(self, name: str, role: Optional[str] = None) -> List[str]:
-        """用 factorized template + descriptor 初始化一批候选。
+        """Initialize a batch of candidates from factorized templates plus descriptors.
         
-        :param name: 类别名
-        :param role: 角色（'normal', 'abnormal' 或 None）
+        :param name: category name
+        :param role: role ('normal', 'abnormal', or None)
         """
         cand = []
 
-        # 根据 role 选择模板和形容词
+        # pick templates and adjectives according to the role
         if role == 'normal':
             templates_to_use = self.normal_templates + self.templates
             adjectives_to_use = self.normal_adjectives + self.adjectives
         elif role == 'abnormal':
-            # 过滤掉含正常语义词的通用模板和形容词
+            # drop generic templates and adjectives that carry normal semantics
             templates_to_use = self.abnormal_templates + [
                 t for t in self.templates
                 if not any(w in t.lower().split() for w in _NORMAL_SEMANTIC_WORDS)
@@ -1549,8 +1550,8 @@ class EvoPromptOptimizer:
 
         descriptor_pool = self._descriptor_pool(role, name)
 
-        # ── 类别无关候选（Category-Agnostic）──
-        # normal 侧仅 1 个（~6%）保持 text_delta 类别定向性，abnormal 侧 ~20% 增强泛化
+        # -- category-agnostic candidates --
+        # only 1 (~6%) on the normal side to keep text_delta category-directed; ~20% on the abnormal side for generalization
         agnostic_pool = (self.agnostic_normal_templates if role == "normal"
                          else self.agnostic_abnormal_templates
                          if role == "abnormal" else [])
@@ -1561,11 +1562,11 @@ class EvoPromptOptimizer:
         for ag_tpl in random.sample(agnostic_pool, k=min(n_agnostic, len(agnostic_pool))):
             cand.append(ag_tpl)
 
-        # 基础模板：保留 class slot
+        # base template: keep the class slot
         for t in templates_to_use:
             cand.append(self._compose_factorized_prompt(t, name, descriptors=[]))
 
-        # descriptor-factorized 变体：强调 descriptor slot
+        # descriptor-factorized variant: emphasize the descriptor slot
         for desc in descriptor_pool[: max(2, self.population_size // 2)]:
             tpl = random.choice(templates_to_use)
             cand.append(self._compose_factorized_prompt(tpl, name, descriptors=[desc]))
@@ -1579,7 +1580,7 @@ class EvoPromptOptimizer:
                 chosen = [random.choice(adjectives_to_use)]
             cand.append(self._compose_factorized_prompt(tpl, name, descriptors=chosen))
         
-        # 去重
+        # deduplicate
         uniq = []
         seen = set()
         for c in cand:
@@ -1590,10 +1591,10 @@ class EvoPromptOptimizer:
 
     def _score(self, candidates: List[str]) -> List[float]:
         """
-        文本先验打分（轻量占位实现，当没有 scoring_callback 时使用）：
-        - 优先长度适中（过长截断风险高；过短信息不足）
-        - 惩罚重复词
-        - 保留 'X ' 前缀
+        Text-prior scoring (a lightweight placeholder used when no scoring_callback is given):
+        - prefer moderate length (too long risks truncation; too short carries little information)
+        - penalize repeated words
+        - keep the 'X ' prefix
         """
         scores = []
         for s in candidates:
@@ -1603,7 +1604,7 @@ class EvoPromptOptimizer:
             if 2 <= L <= 8:
                 sc += 1.0
             sc -= max(0, L - 10) * 0.1
-            # 惩罚重复词
+            # penalize repeated words
             toks = s.lower().split()
             sc -= (len(toks) - len(set(toks))) * 0.2
             scores.append(sc)
@@ -1615,19 +1616,19 @@ class EvoPromptOptimizer:
         scoring_callback: Optional[Callable[[List[str], Optional[str]], List[float]]] = None,
         role: Optional[str] = None
     ) -> List[str]:
-        """选择 top-k 候选。
+        """Select the top-k candidates.
         
-        :param candidates: 候选 prompt 列表
-        :param scoring_callback: 评分回调函数（如果提供，优先使用；否则使用内部 _score）
-        :param role: 角色（传递给 scoring_callback）
+        :param candidates: list of candidate prompts
+        :param scoring_callback: scoring callback (preferred when given; otherwise the internal _score is used)
+        :param role: role (passed through to scoring_callback)
         """
         if scoring_callback is not None:
-            # 使用外部评分回调（例如基于异常分数的评分）
+            # use the external scoring callback (e.g. scoring based on anomaly scores)
             scores = scoring_callback(candidates, role=role)
             if len(scores) != len(candidates):
-                raise ValueError(f"scoring_callback 返回的分数数量 ({len(scores)}) 与候选数量 ({len(candidates)}) 不匹配")
+                raise ValueError(f"scoring_callback returned {len(scores)} scores for {len(candidates)} candidates")
         else:
-            # 使用内部文本先验评分
+            # use the internal text-prior scoring
             scores = self._score(candidates)
         
         ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
@@ -1640,34 +1641,34 @@ class EvoPromptOptimizer:
         k: int,
         role: Optional[str] = None
     ) -> List[str]:
-        """使用最大边际相关性（MMR）进行多样性感知选择。
+        """Diversity-aware selection via Maximal Marginal Relevance (MMR).
         
-        :param candidates: 候选 prompt 列表
-        :param base_scores: 基础分数列表
-        :param k: 选择的候选数
-        :param role: 角色（用于从 text_feat_cache 获取特征）
-        :return: 选择的候选列表
+        :param candidates: list of candidate prompts
+        :param base_scores: list of base scores
+        :param k: number of candidates to select
+        :param role: role (used to fetch features from text_feat_cache)
+        :return: the list of selected candidates
         """
         if len(candidates) <= k:
-            # 按分数排序后返回前 k 个
+            # sort by score and return the first k
             order = sorted(range(len(candidates)), key=lambda i: base_scores[i], reverse=True)
             return [candidates[i] for i in order[:k]]
         
         if not hasattr(self, 'text_feat_cache') or len(self.text_feat_cache) == 0:
-            # 如果没有文本特征缓存，使用 base_scores 排序选择 top-k（与当前 generation 的模型分数一致）
+            # Without a text-feature cache, take the top-k by base_scores (consistent with this generation's model scores)
             order = sorted(range(len(candidates)), key=lambda i: base_scores[i], reverse=True)
             return [candidates[i] for i in order[:k]]
         
-        # 从缓存中获取文本特征
+        # fetch text features from the cache
         selected = []
         remaining = list(range(len(candidates)))
         
-        # 第一步：选择分数最高的
+        # step 1: take the highest-scoring candidate
         best_idx = max(remaining, key=lambda i: base_scores[i])
         selected.append(best_idx)
         remaining.remove(best_idx)
         
-        # 贪心选择剩余 k-1 个
+        # greedily select the remaining k-1
         for _ in range(k - 1):
             if len(remaining) == 0:
                 break
@@ -1684,18 +1685,18 @@ class EvoPromptOptimizer:
                     selected_feats.append(self.text_feat_cache[key])
             
             if len(selected_feats) == 0:
-                # 无法计算多样性，回退到按分数选择
+                # diversity cannot be computed; fall back to selecting by score
                 best_cand_idx = max(remaining, key=lambda i: base_scores[i])
             else:
-                # 计算每个剩余候选的 MMR 分数
+                # compute the MMR score of each remaining candidate
                 if torch is not None:
-                    # 将特征转换为 tensor（如果还不是）
+                    # convert the feature to a tensor if it is not one already
                     selected_tensors = []
                     for feat in selected_feats:
                         if isinstance(feat, torch.Tensor):
                             selected_tensors.append(feat)
                         else:
-                            # 如果是 numpy 或其他格式，尝试转换
+                            # for numpy or other formats, try to convert
                             selected_tensors.append(torch.tensor(feat, dtype=torch.float32))
                     
                     if len(selected_tensors) > 0:
@@ -1706,30 +1707,30 @@ class EvoPromptOptimizer:
                             key = (role_key, cand)
                             if key in self.text_feat_cache:
                                 cand_feat = self.text_feat_cache[key]  # [D]
-                                # 转换为 tensor（如果还不是）
+                                # convert to a tensor if it is not one already
                                 if not isinstance(cand_feat, torch.Tensor):
                                     cand_feat = torch.tensor(cand_feat, dtype=torch.float32)
                                 
-                                # 计算与已选候选的最大余弦相似度
+                                # maximum cosine similarity against the already-selected candidates
                                 similarities = torch.nn.functional.cosine_similarity(
                                     cand_feat.unsqueeze(0), selected_tensor, dim=1
                                 )
                                 max_sim = similarities.max().item()
-                                # MMR 分数 = 相关性 - λ * 冗余性
+                                # MMR score = relevance - lambda * redundancy
                                 mmr_score = base_scores[cand_idx] - self.lambda_diversity * max_sim
                                 if mmr_score > best_mmr:
                                     best_mmr = mmr_score
                                     best_cand_idx = cand_idx
                             else:
-                                # 如果缓存中没有，使用基础分数
+                                # not in the cache: use the base score
                                 if base_scores[cand_idx] > best_mmr:
                                     best_mmr = base_scores[cand_idx]
                                     best_cand_idx = cand_idx
                     else:
-                        # 无法处理特征，回退到按分数选择
+                        # features cannot be handled; fall back to selecting by score
                         best_cand_idx = max(remaining, key=lambda i: base_scores[i])
                 else:
-                    # torch 不可用，回退到按分数选择
+                    # torch unavailable; fall back to selecting by score
                     best_cand_idx = max(remaining, key=lambda i: base_scores[i])
             
             selected.append(best_cand_idx)
@@ -1859,18 +1860,18 @@ class EvoPromptOptimizer:
         return result
 
     def _mutate(self, s: str, name: str, role: Optional[str] = None) -> str:
-        """descriptor-factorized 变异策略。
+        """Descriptor-factorized mutation strategy.
 
-        :param s: 当前 prompt
-        :param name: 类别名
-        :param role: 角色（'normal', 'abnormal' 或 None）
+        :param s: the current prompt
+        :param name: category name
+        :param role: role ('normal', 'abnormal', or None)
         """
-        # 根据 role 选择模板和形容词
+        # pick templates and adjectives according to the role
         if role == 'normal':
             templates_to_use = self.normal_templates + self.templates
             adjectives_to_use = self.normal_adjectives + self.adjectives
         elif role == 'abnormal':
-            # 过滤掉含正常语义词的通用模板和形容词
+            # drop generic templates and adjectives that carry normal semantics
             templates_to_use = self.abnormal_templates + [
                 t for t in self.templates
                 if not any(w in t.lower().split() for w in _NORMAL_SEMANTIC_WORDS)
@@ -1938,14 +1939,14 @@ class EvoPromptOptimizer:
             if len(current_desc) > 1:
                 chosen = current_desc[:-1]
             elif role is not None and current_desc:
-                # 有角色（normal/abnormal）时至少保留 1 个描述词，防止 normal=abnormal
+                # When a role is set (normal/abnormal), keep at least one descriptor so normal never equals abnormal
                 chosen = current_desc
             else:
                 chosen = []
             return self._compose_factorized_prompt(tpl, name, descriptors=chosen)
 
         if op == "template_swap":
-            # 类别无关模板概率：normal 侧 10%（保护 pixel），abnormal 侧 20%（增强泛化）
+            # Category-agnostic template probability: 10% on the normal side (protects pixel), 20% on the abnormal side (aids generalization)
             agnostic_pool = (self.agnostic_normal_templates if role == "normal"
                              else self.agnostic_abnormal_templates
                              if role == "abnormal" else [])
@@ -1988,14 +1989,14 @@ class EvoPromptOptimizer:
                 "clean": ["pristine", "perfect", "flawless"],
             })
 
-        # 对 abnormal 角色，跳过含正常语义的同义词组
+        # for the abnormal role, skip synonym groups carrying normal semantics
         if role == 'abnormal':
             synonyms = {k: v for k, v in synonyms.items()
                         if k not in _NORMAL_SEMANTIC_WORDS}
-            # 替换候选中也过滤正常语义词
+            # also filter normal-semantics words out of the replacement candidates
             synonyms = {k: [w for w in v if w not in _NORMAL_SEMANTIC_WORDS]
                         for k, v in synonyms.items()}
-            synonyms = {k: v for k, v in synonyms.items() if v}  # 移除空列表
+            synonyms = {k: v for k, v in synonyms.items() if v}  # drop empty lists
         lowered = s.lower()
         for word, syns in synonyms.items():
             idx = lowered.find(word)
@@ -2017,14 +2018,14 @@ class EvoPromptOptimizer:
         qd_bd_names: Optional[List[str]] = None,
     ) -> List[str]:
         """
-        优化 prompts（文本级替换）。
+        Optimize prompts (text-level substitution).
         
-        :param prompts: 输入形如 ['X bottle', 'X cable'] 的列表
-        :param scoring_callback: 评分回调函数，接收 (candidates: List[str], role: Optional[str]) -> List[float]
-        :param role: 角色（'normal', 'abnormal' 或 None）
-        :return: 同长度列表，元素为替换后的文本
+        :param prompts: input list such as ['X bottle', 'X cable']
+        :param scoring_callback: scoring callback with signature (candidates: List[str], role: Optional[str]) -> List[float]
+        :param role: role ('normal', 'abnormal', or None)
+        :return: a list of the same length, whose elements are the substituted texts
         """
-        # 每次优化开始时，清空文本特征缓存（避免跨 batch 的陈旧特征）
+        # Clear the text-feature cache at the start of each optimization run (avoids stale cross-batch features)
         self.text_feat_cache.clear()
         
         outs: List[str] = []
@@ -2035,12 +2036,13 @@ class EvoPromptOptimizer:
             cache_name = self._normalize_name(name)
             cache_key = (role_key, cache_name)
 
-            # 检查缓存
+            # check the cache
             if cache_key in self.cache:
                 outs.append(self.cache[cache_key])
                 continue
 
-            # 推理阶段：缺失类别优先从已有缓存解析（避免 test 模式下重新做无意义"优化"）
+            # At inference time, resolve missing categories from the existing cache first
+                # (avoids pointless re-optimization in test mode)
             if self.inference_resolve_missing_from_cache:
                 hit_prompt, _, src = self.resolve_cached_prompt(
                     cache_name,
@@ -2049,8 +2051,8 @@ class EvoPromptOptimizer:
                     allow_role_fallback=self.inference_allow_role_fallback,
                 )
                 if hit_prompt is not None and src in {"exact", "alias", "semantic_fallback", "template_transfer", "role_fallback", "shared_fallback"}:
-                    # 只有精确匹配和语义匹配才写回缓存
-                    # template_transfer/role_fallback/shared_fallback 不写回，避免污染
+                    # only exact and semantic matches are written back to the cache
+                    # template_transfer / role_fallback / shared_fallback are not written back, to avoid contamination
                     if src in {"exact", "alias", "semantic_fallback"}:
                         self.cache[cache_key] = hit_prompt
                     outs.append(hit_prompt)
@@ -2099,17 +2101,17 @@ class EvoPromptOptimizer:
                 outs.append(best)
                 continue
 
-            # 初始化种群
+            # initialize the population
             pop = self._init_population(cache_name, role=role)
             pool = pop[:]
             
             _bd_names = qd_bd_names or ["image_auroc", "pixel_f1"]
 
-            # 进化迭代
+            # evolutionary iterations
             for gen in range(self.generations):
-                # 选择（使用 scoring_callback 如果提供）
+                # selection (uses scoring_callback when provided)
                 if scoring_callback is not None:
-                    # 先调用 scoring_callback 获取分数（它会填充 text_feat_cache）
+                    # call scoring_callback first to obtain scores (it also fills text_feat_cache)
                     _cb_result = scoring_callback(pool, role=role)
                     scores = self._extract_score_list(_cb_result, expected_len=len(pool))
 
@@ -2135,10 +2137,10 @@ class EvoPromptOptimizer:
                         ranked = sorted(zip(pool, scores), key=lambda x: x[1], reverse=True)
                         elite = [c for c, _ in ranked[:self.topk]]
                 else:
-                    # 使用普通选择（内部文本先验评分）
+                    # plain selection (internal text-prior scoring)
                     elite = self._select(pool, scoring_callback=None, role=role)
                 
-                # 变异 / 标准 crossover 生成新候选
+                # mutation / standard crossover to produce new candidates
                 op_counts = {"mutation": 0, "crossover": 0}
                 newc = [
                     self._spawn_standard_offspring(elite, cache_name, role, op_counts)
@@ -2146,7 +2148,7 @@ class EvoPromptOptimizer:
                 ]
                 pool = elite + newc
 
-                # 去重后补齐：避免种群塌缩
+                # refill after deduplication to avoid population collapse
                 pool = list(dict.fromkeys(pool))
                 for _ in range(self.population_size * 3):
                     if len(pool) >= self.population_size:
@@ -2175,7 +2177,7 @@ class EvoPromptOptimizer:
                     self.evo_crossover_rate,
                 )
 
-            # 选择最终最佳候选
+            # pick the final best candidate
             if scoring_callback is not None:
                 _cb_final = scoring_callback(pool, role=role)
                 final_scores = self._extract_score_list(_cb_final, expected_len=len(pool))
@@ -2219,7 +2221,7 @@ class EvoPromptOptimizer:
                     qd_archive.get_best().quality if qd_archive.get_best() else 0.0,
                 )
             
-            # 缓存结果
+            # cache the result
             self.cache[cache_key] = best
             outs.append(best)
         
@@ -2233,13 +2235,13 @@ class EvoPromptOptimizer:
         rerank_topk: int = 0,
     ) -> Tuple[List[str], List[str]]:
         """
-        双分支优化：分别为 normal 和 abnormal 分支优化 prompts。
+        Dual-branch optimization: optimize prompts separately for the normal and abnormal branches.
         
-        :param prompts: 输入形如 ['X bottle', 'X cable'] 的列表
-        :param scoring_callback: 评分回调函数，接收 (candidates: List[str], role: Optional[str]) -> List[float]
-        :return: (optimized_normal_prompts, optimized_abnormal_prompts) 元组
+        :param prompts: input list such as ['X bottle', 'X cable']
+        :param scoring_callback: scoring callback with signature (candidates: List[str], role: Optional[str]) -> List[float]
+        :return: the tuple (optimized_normal_prompts, optimized_abnormal_prompts)
         """
-        # 先优化 normal 分支
+        # optimize the normal branch first
         optimized_normal = self.optimize(
             prompts,
             scoring_callback=scoring_callback,
@@ -2248,7 +2250,7 @@ class EvoPromptOptimizer:
             rerank_topk=rerank_topk,
         )
         
-        # 再优化 abnormal 分支
+        # then optimize the abnormal branch
         optimized_abnormal = self.optimize(
             prompts,
             scoring_callback=scoring_callback,
@@ -2261,7 +2263,7 @@ class EvoPromptOptimizer:
 
     # ─── Template Transfer ───────────────────────────────────────────
 
-    # 明显偏 normal 的词，用于过滤不可靠的 abnormal 规则
+    # Strongly normal-leaning words, used to filter out unreliable abnormal rules
     _NORMAL_INDICATOR_TOKENS = frozenset({
         "normal", "clean", "pristine", "flawless", "perfect", "good",
         "standard", "typical", "plain", "basic", "regular", "pure",
@@ -2274,9 +2276,9 @@ class EvoPromptOptimizer:
     })
 
     def extract_transfer_templates(self) -> Dict[str, Dict[str, Any]]:
-        """从缓存规则中提取可迁移模板及频次统计。
+        """Extract transferable templates and their frequency statistics from the cached rules.
 
-        对 abnormal 角色过滤含 normal 语义描述词的规则。
+        For the abnormal role, rules whose descriptors carry normal semantics are filtered out.
 
         Returns:
             {
@@ -2303,7 +2305,7 @@ class EvoPromptOptimizer:
                 continue
             prompt = str(prompt)
 
-            # 从 prompt 中把源类名替换为 {name}
+            # replace the source category name in the prompt with {name}
             matched_name = None
             prompt_lower = prompt.lower()
             for cand_name in self._candidate_names(source_name):
@@ -2315,7 +2317,7 @@ class EvoPromptOptimizer:
             idx = prompt_lower.index(matched_name)
             template = prompt[:idx] + "{name}" + prompt[idx + len(matched_name):]
 
-            # 过滤不可靠的 abnormal 模板
+            # filter out unreliable abnormal templates
             if role == "abnormal":
                 name_tokens = set(self._tokenize_prompt_text(matched_name))
                 content_tokens = [
@@ -2329,7 +2331,7 @@ class EvoPromptOptimizer:
                 if set(semantic_tokens) & self._NORMAL_INDICATOR_TOKENS:
                     logger.debug("Filtered unreliable abnormal template: %s (source: %s)", prompt, source_name)
                     continue
-                # 过滤纯模板壳子（如 "X capsule" / "X a photo of leather"）
+                # drop bare template shells (e.g. "X capsule" / "X a photo of leather")
                 if not semantic_tokens:
                     continue
 
@@ -2345,7 +2347,7 @@ class EvoPromptOptimizer:
             stats["structure_counts"] = dict(structure_counts)
 
         logger.info(
-            "[TemplateTransfer] 提取模板: normal=%d(%d unique), abnormal=%d(%d unique), shared=%d(%d unique)",
+            "[TemplateTransfer] extracted templates: normal=%d(%d unique), abnormal=%d(%d unique), shared=%d(%d unique)",
             len(stats_by_role["normal"]["raw_templates"]),
             len(stats_by_role["normal"]["unique_templates"]),
             len(stats_by_role["abnormal"]["raw_templates"]),
@@ -2361,17 +2363,17 @@ class EvoPromptOptimizer:
         role: str,
         donor_source: Optional[str] = None,
     ) -> Optional[Tuple[str, str]]:
-        """通过模板迁移为目标域类别生成 prompt。
+        """Generate a prompt for a target-domain category via template transfer.
 
-        从源域规则提取模板模式，应用到目标类名。
-        使用共识策略：按模板出现频率排序，选最高频模板。
+        A template pattern is extracted from the source-domain rules and applied to the target category name.
+        A consensus strategy is used: templates are ranked by frequency and the most frequent one is chosen.
 
         Args:
-            name: 目标类别名
-            role: 角色 ('normal', 'abnormal', 'shared')
+            name: target category name
+            role: role ('normal', 'abnormal', 'shared')
 
         Returns:
-            (prompt, source_info) 或 None
+            (prompt, source_info), or None
         """
         if self._transfer_templates_cache is None:
             self._transfer_templates_cache = self.extract_transfer_templates()
@@ -2397,7 +2399,7 @@ class EvoPromptOptimizer:
         if not unique_templates:
             return None
 
-        # 按真实频次选 top 模板；并列时保留首次出现顺序（unique_templates 已稳定）
+        # Pick the top template by true frequency; ties keep first-appearance order (unique_templates is already stable)
         valid_templates = [template for template in unique_templates if "{name}" in template]
         if not valid_templates:
             logger.warning("Template transfer skipped: no valid templates with {name} for role=%s", role_key)
@@ -2422,9 +2424,9 @@ class EvoPromptOptimizer:
         return prompt, source
 
     def save_optimized_rules(self, save_path: str) -> None:
-        """保存优化后的 prompt 规则到文件。
+        """Save the optimized prompt rules to a file.
         
-        :param save_path: 保存路径（JSON 格式）
+        :param save_path: output path (JSON format)
         """
         rules = {
             "cache": {f"{role}_{name}": prompt for (role, name), prompt in self.cache.items()},
@@ -2444,24 +2446,24 @@ class EvoPromptOptimizer:
         os.makedirs(os.path.dirname(save_path) if os.path.dirname(save_path) else ".", exist_ok=True)
         with open(save_path, 'w', encoding='utf-8') as f:
             json.dump(rules, f, indent=2, ensure_ascii=False)
-        print(f"[EvoPrompt] 已保存 {len(self.cache)} 条优化规则到 {save_path}")
+        print(f"[EvoPrompt] saved {len(self.cache)} optimized rules to {save_path}")
 
     def load_optimized_rules(self, load_path: str) -> None:
-        """从文件加载优化后的 prompt 规则。
+        """Load optimized prompt rules from a file.
         
-        :param load_path: 加载路径（JSON 格式）
+        :param load_path: input path (JSON format)
         """
         if not os.path.exists(load_path):
-            print(f"[EvoPrompt] 规则文件不存在: {load_path}，将使用默认模板")
+            print(f"[EvoPrompt] rule file not found: {load_path}; falling back to the default templates")
             return
         
         with open(load_path, 'r', encoding='utf-8') as f:
             rules = json.load(f)
         
-        # 恢复缓存（将 "role_name" 格式转换回 (role, name) 元组）
+        # restore the cache (convert the "role_name" form back into a (role, name) tuple)
         cache_data = rules.get("cache", {})
         for key, prompt in cache_data.items():
-            # 解析 "role_name" 格式，例如 "normal_bottle" -> ("normal", "bottle")
+            # parse the "role_name" form, e.g. "normal_bottle" -> ("normal", "bottle")
             parts = key.split("_", 1)
             if len(parts) == 2:
                 role, name = parts
@@ -2475,7 +2477,7 @@ class EvoPromptOptimizer:
             role, name = parts
             self.rule_metadata[(role, self._normalize_name(name))] = meta
         
-        # 可选：更新模板池（如果保存了）
+        # optional: refresh the template pool if one was saved
         if "templates" in rules:
             self.templates = rules["templates"]
         if "normal_templates" in rules:
@@ -2484,7 +2486,7 @@ class EvoPromptOptimizer:
             self.abnormal_templates = rules["abnormal_templates"]
         self._transfer_templates_cache = None
         
-        print(f"[EvoPrompt] 已加载 {len(self.cache)} 条优化规则从 {load_path}")
+        print(f"[EvoPrompt] loaded {len(self.cache)} optimized rules from {load_path}")
 
     def set_rule_metadata(self, name: str, role: Optional[str], metadata: Dict[str, Any]) -> None:
         role_key = role or "shared"
@@ -2495,18 +2497,18 @@ class EvoPromptOptimizer:
         return self.rule_metadata.get((role_key, self._normalize_name(name)))
 
     def clear_cache(self) -> None:
-        """清空缓存。"""
+        """Clear the cache."""
         self.cache.clear()
         self.rule_metadata.clear()
         self.text_feat_cache.clear()
         self._transfer_templates_cache = None
-        print("[EvoPrompt] 缓存已清空")
+        print("[EvoPrompt] cache cleared")
 
 
 def build_evo_prompt_optimizer(**kwargs) -> EvoPromptOptimizer:
     """
-    构建 EvoPrompt 文本级优化器。
+    Build the text-level EvoPrompt optimizer.
     
-    :return: EvoPromptOptimizer 实例
+    :return: an EvoPromptOptimizer instance
     """
     return EvoPromptOptimizer(**kwargs)

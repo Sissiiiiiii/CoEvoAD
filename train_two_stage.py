@@ -142,8 +142,8 @@ class TwoStageTrainer:
         self.make_dataset = Makedataset(
             train_data_path=args.train_data_path,
             preprocess_test=preprocess,
-            mode="train",           # 保留 train-time augmentation
-            split_override="test",  # 加载 test split（有异常标签，source-supervised）
+            mode="train",           # keep train-time augmentation
+            split_override="test",  # load the test split (has anomaly labels, source-supervised)
             image_size=args.image_size,
             mask_guided_crop_prob=args.mask_guided_crop_prob,
         )
@@ -278,7 +278,7 @@ class TwoStageTrainer:
             stage = 2
             optimizer = optimizer_stage2
             scheduler = None
-            # 先做一次 eval，用初始 checkpoint 的 image AP 作为 best-checkpoint 基准
+            # Run one eval first, using the initial checkpoint's image AP as the best-checkpoint baseline
             _, init_ap_image = evaluate_pre(
                 val_dataloader, self.model_clip, self.model,
                 self.device, self.args, val_obj_list,
@@ -361,9 +361,9 @@ class TwoStageTrainer:
                     if self.args.stage2_div_loss_weight > 0:
                         loss = loss + self.args.stage2_div_loss_weight * loss_text
 
-                # 改动 4: Abnormal-side category-agnostic regularization
-                # 以低概率用 "X object" 替代 "X {category}"，只对 abnormal 侧
-                # 强迫 visual_abnormal tokens 不过度依赖类别名
+                # Change 4: Abnormal-side category-agnostic regularization
+                # With low probability, replace "X {category}" by "X object", abnormal side only
+                # Forces visual_abnormal tokens not to over-rely on the category name
                 if stage == 1 and self.args.agnostic_reg_prob > 0 and random.random() < self.args.agnostic_reg_prob:
                     agnostic_names = ["X object"] * len(cls_name)
                     agnostic_tokens = self.tokenizer(agnostic_names)
@@ -374,8 +374,8 @@ class TwoStageTrainer:
                     visual_abnormal = torch.cat([self.model.prompt_context, self.model.prompt_state_abnormal], dim=1)
                     agnostic_abnormal_emb = self.text_encoder(agnostic_tokens, visual_abnormal)
                     agnostic_abnormal_emb = agnostic_abnormal_emb / (agnostic_abnormal_emb.norm(dim=-1, keepdim=True) + 1e-12)
-                    # 用 agnostic abnormal + 原 normal 计算辅助 classification loss
-                    normal_emb = text_embeddings[:, :pn, :].detach()  # 断梯度，不影响 normal 侧
+                    # Compute the auxiliary classification loss from agnostic abnormal + original normal
+                    normal_emb = text_embeddings[:, :pn, :].detach()  # detach: leaves the normal side untouched
                     agnostic_text = torch.cat([normal_emb, agnostic_abnormal_emb], dim=1)
                     agnostic_pro_img = self.model(
                         agnostic_text, image_features, patch_tokens, stage=stage, mode="train",
@@ -468,7 +468,7 @@ class TwoStageTrainer:
                             self.logger.info("Stage 2 early stop (image AP stalled)")
                             break
 
-        # 恢复最佳权重后再保存（防止循环自然结束时存到末轮权重）
+        # Restore best weights before saving (avoids storing last-epoch weights when the loop ends naturally)
         ema.load_check()
         ckpt_name = "stage1_final.pth" if stage == 1 else "two_stage_final.pth"
         final_ckp_path = os.path.join(self.args.save_path, ckpt_name)
@@ -481,7 +481,7 @@ class TwoStageTrainer:
 
         if checkpoint_path and not getattr(self.args, "checkpoint_path", ""):
             self.args.checkpoint_path = checkpoint_path
-        # 兼容两种 checkpoint 命名：stage1_final.pth / two_stage_final.pth
+        # Support both checkpoint names: stage1_final.pth / two_stage_final.pth
         ckp = getattr(self.args, "checkpoint_path", "")
         if ckp and not os.path.isfile(ckp):
             alt_names = ["stage1_final.pth", "two_stage_final.pth"]

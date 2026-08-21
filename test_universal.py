@@ -1,11 +1,11 @@
 """
-Universal Test — 使用 scorer + 优化后的 EvoPrompt 规则进行统一推理
+Universal Test - unified inference using a scorer plus optimized EvoPrompt rules.
 
-支持确定性 Prompt Bank 和任意外部模型（通过 AnomalyScorer 接口）。
-像素图硬约束：对需要分割评测的数据集，若 scorer 返回 pixel_maps=None，
-立即抛 ValueError 并退出。
+Supports a deterministic Prompt Bank and arbitrary external models (via the AnomalyScorer interface).
+Hard constraint on pixel maps: for datasets requiring segmentation evaluation, if the scorer
+returns pixel_maps=None, a ValueError is raised immediately.
 
-使用方法:
+Usage:
     # Prompt bank scorer
     python test_universal.py --scorer_type prompt_bank --dataset mvtec \
         --checkpoint_path ./my_exps/.../stage1_final.pth \
@@ -49,17 +49,15 @@ _REQUIRED_FROZEN_KEYS = (
 
 
 def _compute_current_grid_hash() -> str:
-    """Recompute canonical-JSON sha256 of the pre-registered grid.
+    """Recompute the canonical-JSON sha256 of the pre-registered grid.
 
-    Spec §5.3. Lives next to the spec; test_universal.py reads it lazily so the
-    runtime cost is one YAML parse per process and only when validating a
-    frozen config.
+    Read lazily, so the runtime cost is one YAML parse per process and only
+    when validating a frozen config.
     """
     import yaml
     grid_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "docs", "superpowers", "specs",
-        "2026-04-19-source-calibrated-score-fusion-grid.yaml",
+        "configs", "score_fusion_grid.yaml",
     )
     with open(grid_path, "r", encoding="utf-8") as fh:
         grid = yaml.safe_load(fh)
@@ -68,10 +66,10 @@ def _compute_current_grid_hash() -> str:
 
 
 def _load_score_fusion_config(path):
-    """Load + validate a frozen score-fusion config. Spec §6.2.
+    """Load and validate a frozen score-fusion config.
 
     Empty string → None (default path). Any failure → SystemExit (no silent
-    fallback, per §6.2 'do NOT silently fall back to defaults').
+    fallback: a bad config is an error, never a silent default).
     """
     if not path:
         return None
@@ -308,7 +306,7 @@ def _load_model_config(args):
 
 
 def _enforce_transfer_mainline(args, logger=None, route_config: Optional[RouteRuntimeConfig] = None):
-    """测试入口约束：固定 test split + 路由配置身份可审计。"""
+    """Test-entry constraints: a fixed test split and an auditable routing-configuration identity."""
     profile_name = (route_config.profile_name if route_config is not None else "STRICT_MAINLINE")
     msg = (
         f"Universal test route-profile='{profile_name}' "
@@ -319,7 +317,7 @@ def _enforce_transfer_mainline(args, logger=None, route_config: Optional[RouteRu
 
 
 # ---------------------------------------------------------------------------
-# EvoPrompt 规则加载与回退
+# EvoPrompt rule loading and fallback
 # ---------------------------------------------------------------------------
 
 def setup_evo_optimizer_for_test(
@@ -329,14 +327,14 @@ def setup_evo_optimizer_for_test(
     logger=None,
     route_config: Optional[RouteRuntimeConfig] = None,
 ):
-    """加载规则、检测 dual/shared、配置 fallback。返回配置好的 evo_optimizer。"""
+    """Load rules, detect dual/shared mode, configure fallback, and return the prepared evo_optimizer."""
     route_config = route_config or STRICT_ROUTE_CONFIG
     evo_optimizer = EvoPromptOptimizer(
         population_size=getattr(args, "evo_population", 8),
         generations=getattr(args, "evo_generations", 3),
         topk=getattr(args, "evo_topk", 4),
     )
-    # 标记测试阶段是否真正加载到了可用规则（用于 baseline 路径判定）
+    # Record whether usable rules were actually loaded at test time (decides the baseline path)
     evo_optimizer.has_loaded_rules = False
 
     rules_path = getattr(args, "evo_rules_path", "")
@@ -353,7 +351,7 @@ def setup_evo_optimizer_for_test(
         if logger:
             logger.warning("Rules file not found: %s; fallback prompts will be used", rules_path)
 
-    # 自动检测 dual/shared 模式
+    # auto-detect dual/shared mode
     role_stats = {"normal": 0, "abnormal": 0, "shared": 0, "other": 0}
     for key in evo_optimizer.cache.keys():
         if isinstance(key, tuple) and len(key) == 2:
@@ -375,7 +373,7 @@ def setup_evo_optimizer_for_test(
         if logger:
             logger.info("Auto-enable --evo_dual_branch (detected dual rules)")
 
-    # 配置推理模式（strict/supp 由 route_config 控制）
+    # configure the inference mode (strict/supp is controlled by route_config)
     evo_optimizer.text_replace_only = True
     evo_optimizer.donor_route_enabled = not bool(getattr(args, "disable_donor_route", True))
     evo_optimizer.configure_inference_resolution(
@@ -438,7 +436,7 @@ def resolve_prompts(
     cls_name_l,
     route_config: Optional[RouteRuntimeConfig] = None,
 ):
-    """从 EvoPrompt 缓存解析 normal/abnormal prompts。"""
+    """Resolve normal/abnormal prompts from the EvoPrompt cache."""
     route_config = route_config or STRICT_ROUTE_CONFIG
     allow_role_fallback = route_config.allow_role_fallback
     if getattr(args, "global_shared_prompts", False):
@@ -454,7 +452,7 @@ def resolve_prompts(
 
     resolver = getattr(evo_optimizer, "resolve_cached_prompt", None)
     if resolver is None:
-        # 无 resolver，回退默认
+        # no resolver; fall back to the default
         if getattr(args, "evo_dual_branch", False):
             return (
                 f"X normal {cls_name_l}",
@@ -734,7 +732,7 @@ def apply_safe_switch_decision(
     if not callable(getter):
         return default_normal, default_abnormal, f"{source}+safe_default"
 
-    # 跨域 transfer 时，metadata 按训练类别名存储，需用 source_category 查找
+    # For cross-domain transfer, metadata is keyed by the training category name, so look it up via source_category
     meta_key = source_category or cls_name_l
     meta = getter(meta_key, "pair")
     if not isinstance(meta, dict):
@@ -1017,15 +1015,15 @@ def _infer_single_pair(
 
 
 def compute_and_report_metrics(results, obj_list, logger, args):
-    """分发 metric 计算。"""
+    """Dispatch metric computation."""
     cfg = _load_score_fusion_config(getattr(args, "score_fusion_config", "") or "")
     if cfg is not None and args.dataset in DATASETS_ONLY_CLASSIFICATION:
         sys.exit(
             f"score_fusion_config: dataset {args.dataset!r} is classification-only; "
-            f"score-fusion config is not supported for this dataset (spec §6.2)."
+            f"score-fusion config is not supported for this dataset."
         )
     if cfg is not None:
-        # Spec §9.2 R2: TARGET_EVAL audit emitted only once we know the config will be applied.
+        # TARGET_EVAL audit is emitted only once we know the config will be applied.
         config_hash = _hashlib.sha256(
             json.dumps(cfg, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
@@ -1050,10 +1048,10 @@ def compute_and_report_metrics(results, obj_list, logger, args):
 # ---------------------------------------------------------------------------
 
 def _load_proto_banks(args, scorer, device, logger) -> Dict[str, Any]:
-    """加载 prototype bank 并为每类构建 PrototypeAugmentedScorer。
+    """Load the prototype bank and build a PrototypeAugmentedScorer per category.
 
-    :param scorer: 已构建的 base scorer 实例（复用，不新建）
-    返回 {category_lower: PrototypeAugmentedScorer} 字典。
+    :param scorer: an already-built base scorer instance (reused, not recreated)
+    Returns a {category_lower: PrototypeAugmentedScorer} dict.
     """
     from models.prototype_bank import (
         PrototypeAugmentedScorer,
@@ -1063,12 +1061,12 @@ def _load_proto_banks(args, scorer, device, logger) -> Dict[str, Any]:
 
     bank_path = getattr(args, "proto_bank_path", "")
     if not bank_path:
-        # 尝试在 save_path 下查找
+        # try under save_path
         candidate = os.path.join(getattr(args, "save_path", "."), "prototype_bank.pt")
         if os.path.exists(candidate):
             bank_path = candidate
         else:
-            # 尝试在 evo_rules_path 同目录
+            # try the same directory as evo_rules_path
             evo_path = getattr(args, "evo_rules_path", "")
             if evo_path:
                 candidate = os.path.join(os.path.dirname(evo_path), "prototype_bank.pt")
@@ -1094,7 +1092,7 @@ def _load_proto_banks(args, scorer, device, logger) -> Dict[str, Any]:
             continue
         bank, alpha_img, alpha_px = result
 
-        # 仅当 CLI 显式指定 alpha 时才覆盖存储值；否则复用 Stage2 grid search 结果
+        # Only override the stored value when alpha is given explicitly on the CLI; otherwise reuse the Stage2 grid-search result
         cli_alpha_img = getattr(args, "proto_alpha_image", None)
         cli_alpha_px = getattr(args, "proto_alpha_pixel", None)
         if cli_alpha_img is None:
@@ -1119,22 +1117,22 @@ def _load_proto_banks(args, scorer, device, logger) -> Dict[str, Any]:
 
 
 def _load_shared_proto_bank(args, scorer, device, logger):
-    """加载共享 prototype bank，返回单一 PrototypeAugmentedScorer（所有类别共用）。
+    """Load the shared prototype bank and return a single PrototypeAugmentedScorer (shared by all categories).
 
-    查找顺序：
-      1. --shared_proto_bank_path 显式指定
+    Lookup order:
+      1. --shared_proto_bank_path, if given explicitly
       2. save_path/shared_prototype_bank.pt
-      3. evo_rules_path 同目录下 shared_prototype_bank.pt
+      3. shared_prototype_bank.pt in the same directory as evo_rules_path
 
-    Alpha 来源：
-      1. CLI --proto_alpha_image / --proto_alpha_pixel（如指定）
-      2. shared_prototype_bank_meta.json 中保存的 grid search 结果
+    Alpha source:
+      1. CLI --proto_alpha_image / --proto_alpha_pixel (if given)
+      2. the grid-search result stored in shared_prototype_bank_meta.json
 
-    :returns: PrototypeAugmentedScorer 实例，或 None（加载失败时）
+    :returns: a PrototypeAugmentedScorer instance, or None if loading fails
     """
     from models.prototype_bank import PrototypeAugmentedScorer, PrototypeBank
 
-    # ── 查找 bank 文件 ──
+    # -- locate the bank file --
     bank_path = getattr(args, "shared_proto_bank_path", "")
     if not bank_path or not os.path.exists(bank_path):
         candidates = []
@@ -1163,9 +1161,9 @@ def _load_shared_proto_bank(args, scorer, device, logger):
     bank = PrototypeBank.load(bank_path, device=device)
     logger.info("  Shared bank summary: %s", bank.summary)
 
-    # ── 查找 alpha（meta json）──
+    # -- look up alpha (meta json) --
     meta_path = bank_path.replace(".pt", "_meta.json")
-    alpha_img = 0.3  # 默认值
+    alpha_img = 0.3  # default
     alpha_px = 0.5
     if os.path.exists(meta_path):
         try:
@@ -1182,7 +1180,7 @@ def _load_shared_proto_bank(args, scorer, device, logger):
     else:
         logger.info("  No meta file found (%s), using default alpha", meta_path)
 
-    # CLI 显式覆盖
+    # explicit CLI override
     cli_alpha_img = getattr(args, "proto_alpha_image", None)
     cli_alpha_px = getattr(args, "proto_alpha_pixel", None)
     if cli_alpha_img is not None:
@@ -1232,12 +1230,12 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
     for arg in vars(args):
         logger.info("%s: %s", arg, getattr(args, arg))
 
-    # 构建 scorer
+    # build the scorer
     scorer = build_scorer(args, device)
     logger.info("Scorer: %s", type(scorer).__name__)
 
-    # 加载 prototype bank
-    # 优先级: shared prototype bank > per-category prototype bank
+    # load the prototype bank
+    # priority: shared prototype bank > per-category prototype bank
     shared_proto_scorer = None
     proto_banks_by_category: Dict[str, Any] = {}
     if getattr(args, "shared_prototype_bank", False):
@@ -1247,12 +1245,12 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
     elif getattr(args, "enable_prototype_bank", False):
         proto_banks_by_category = _load_proto_banks(args, scorer, device, logger)
 
-    # 加载 EvoPrompt 规则
+    # load EvoPrompt rules
     evo_optimizer = setup_evo_optimizer_for_test(
         args, device, scorer, logger, route_config=route_config
     )
 
-    # 加载 ESPR refined embeddings
+    # load ESPR refined embeddings
     espr_embeddings: Dict[str, torch.Tensor] = {}
     _espr_path = getattr(args, "espr_embeddings_path", "")
     if _espr_path:
@@ -1279,7 +1277,7 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
             )
         logger.info("ESPR embeddings loaded: %s (%d categories)", _espr_path, len(espr_embeddings))
 
-    # 准备数据集
+    # prepare the dataset
     preprocess_test = _transform_test(args.image_size)
     make_dataset = Makedataset(
         train_data_path=args.data_path,
@@ -1303,9 +1301,10 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
     logger.info("Product list filter: %s", product_list)
     logger.info("Categories: %s", obj_list)
 
-    # ── 跨域 prototype bank 匹配 ──────────────────────────────────
-    # 当 proto bank 来自源域（如 VisA），而测试集是目标域（如 MVTec）时，
-    # 类别名不会精确匹配。用 CLIP 文本特征相似度为每个目标类别找最近邻源类别。
+    # -- cross-domain prototype bank matching ------------------------------
+    # When the proto bank comes from the source domain (e.g. VisA) but the test set is the
+    # target domain (e.g. MVTec), category names do not match exactly. CLIP text-feature
+    # similarity is used to find the nearest source category for each target category.
     if proto_banks_by_category:
         _missing_cats = [
             c.lower() for c in obj_list
@@ -1317,7 +1316,7 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
                 "building CLIP similarity mapping...",
                 len(_missing_cats), len(obj_list),
             )
-            # 构建 CLIP text encoder
+            # build the CLIP text encoder
             _clip_model = getattr(scorer, "model_clip", None)
             _tok_fn = getattr(scorer, "tokenizer", None)
             _ext_adapter2 = getattr(scorer, "adapter", None)
@@ -1345,13 +1344,13 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
                     "%d categories will use base scorer", len(_missing_cats),
                 )
             if _encode_texts is not None:
-                # 计算源域类别（bank 中的）的 CLIP embeddings
+                # compute CLIP embeddings for the source categories present in the bank
                 _bank_cats = list(proto_banks_by_category.keys())
                 _bank_embs = _encode_texts(
                     [_route_tmpl.format(c) for c in _bank_cats]
                 )  # [N_src, D]
 
-                # 为每个缺失的目标类别计算相似度，找最近邻
+                # for each missing target category, compute similarity and take the nearest neighbour
                 _query_embs = _encode_texts(
                     [_route_tmpl.format(c) for c in _missing_cats]
                 )  # [N_miss, D]
@@ -1388,7 +1387,7 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
             stage = 2
             logger.warning("Cannot parse stage from checkpoint '%s', defaulting to stage=2", checkpoint_path)
 
-    # stage1_final checkpoint 没有训练过 fuse/image_mapping，必须用 stage=1 forward path
+    # The stage1_final checkpoint never trained fuse/image_mapping, so it must use the stage=1 forward path
     if checkpoint_path and "stage1_final" in os.path.basename(checkpoint_path) and stage == 2:
         stage = 1
         logger.warning(
@@ -1397,7 +1396,7 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
 
     need_pixel = args.dataset not in DATASETS_ONLY_CLASSIFICATION
 
-    # 结果容器
+    # result containers
     results = {
         "cls_names": [],
         "imgs_masks": [],
@@ -1419,11 +1418,11 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
     icsr_audit = None
     soft_mix_opts: Optional[SoftMixOptions] = None
 
-    # 构建 route encoder：优先用 semantic_embed_fn，否则从 scorer 的 CLIP 模型构建
+    # Build the route encoder: prefer semantic_embed_fn, else build it from the scorer's CLIP model
     _route_encoder = None
 
     def _build_route_encoder():
-        """从 scorer 的 CLIP 模型构建 route encoder（仅 shared bank 路由用）。"""
+        """Build a route encoder from the scorer's CLIP model (used only for shared-bank routing)."""
         _ext_adapter3 = getattr(scorer, "adapter", None)
         if _ext_adapter3 is not None and hasattr(_ext_adapter3, "encode_text"):
             def _encode(texts):
@@ -1699,7 +1698,7 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
         gt_mask[gt_mask > 0.5], gt_mask[gt_mask <= 0.5] = 1, 0
         results["imgs_masks"].append(gt_mask)
 
-        # 选择 scorer：共享 bank > per-category bank > base scorer
+        # scorer choice: shared bank > per-category bank > base scorer
         if shared_proto_scorer is not None:
             active_scorer = shared_proto_scorer
         elif cls_name_l in proto_banks_by_category:
@@ -1741,7 +1740,7 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
             )[0].detach().cpu().contiguous()
 
         if use_official_baseline:
-            # 该路径不使用 resolved prompts；日志单独标注，保证 route evidence 可审计。
+            # This path does not use resolved prompts; it is logged separately to keep the route evidence auditable.
             normal_prompt = f"X normal {cls_name_l}"
             abnormal_prompt = f"X abnormal {cls_name_l}"
             source = "external:official_baseline"
@@ -1806,11 +1805,11 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
                 logger.info("Class '%s' → %s", cls_name_l, source)
                 warned_missing_cls.add(cls_name_l)
         else:
-            # 解析 prompts（主线 deterministic 路由）
+            # resolve prompts (mainline deterministic routing)
             normal_prompt, abnormal_prompt, source, resolve_meta = resolve_prompts(
                 args, evo_optimizer, cls_name_l, route_config=route_config
             )
-            # 跨域时 source_category 是训练域的类别名（由 semantic transfer 找到）
+            # For cross-domain runs, source_category is the training-domain category name (found by semantic transfer)
             _src_cat = resolve_meta.get("normal_source_category", cls_name_l)
             normal_prompt, abnormal_prompt, source = apply_safe_switch_decision(
                 evo_optimizer=evo_optimizer,
@@ -1987,7 +1986,7 @@ def run_universal_test(args, route_config: Optional[RouteRuntimeConfig] = None):
         for audit_line in format_icsr_alpha_lines(icsr_audit):
             logger.info(audit_line)
 
-    # 计算指标
+    # compute metrics
     compute_and_report_metrics(results, obj_list, logger, args)
 
     _dump_debug_scores(getattr(args, "debug_dump_scores", "") or "", results)
@@ -2163,22 +2162,21 @@ def build_base_parser():
     parser.add_argument("--icsr_alpha_formula", type=str, default="F_A",
                         choices=["F_A", "F_C"],
                         help="Alpha formula. F_A=arithmetic mean (default). F_C=margin-weighted "
-                             "(not implemented this round).")
+                             "(not implemented).")
     parser.add_argument("--icsr_alpha_range_source", type=str, default="fixed",
                         choices=["fixed", "adaptive"],
-                        help="Source of normalization ranges. fixed=EXP-161-derived constants "
-                             "(default). adaptive=per-run quantile calibration (not implemented "
-                             "this round).")
+                        help="Source of normalization ranges. fixed=precomputed constants (default). "
+                             "adaptive=per-run quantile calibration (not implemented).")
     parser.add_argument("--espr_embeddings_path", type=str, default="",
-                        help="Path to espr_embeddings.pt from tools/run_espr_refinement.py. "
+                        help="Path to a precomputed espr_embeddings.pt. "
                              "When set, bypasses text encoding for categories with refined embeddings.")
     parser.add_argument("--debug_dump_scores", type=str, default="",
-                        help="If non-empty, write per-image scores/gt/class/path JSON to this path after metric computation. Used for R1/R2 regression smoke tests.")
+                        help="If non-empty, write per-image scores/gt/class/path JSON to this path after metric computation. Useful for regression checks.")
     parser.add_argument(
         "--score_fusion_config",
         type=str,
         default="",
-        help="Path to frozen score-fusion JSON (spec 2026-04-19 §6.2, §8). "
+        help="Path to a frozen score-fusion JSON config. "
              "Empty string → default scoring head (bit-equal to legacy). "
              "Non-empty path that fails to load is a HARD ERROR (no silent fallback).",
     )
@@ -2188,7 +2186,7 @@ def build_base_parser():
         type=str,
         default="",
         help="Path to write a float32 npz of top-65,536 raw anomaly + image_score_input "
-             "per image (spec 2026-04-19 §7). Used by tools/calibrate_score_fusion.py. "
+             "per image, for offline score-fusion calibration. "
              "Empty string → no dump.",
     )
 

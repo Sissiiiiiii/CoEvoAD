@@ -1,0 +1,29 @@
+# Pre-registered grid for source-calibrated score fusion.
+# DO NOT EDIT VALUES - frozen for reproducibility. Format-only changes (whitespace,
+# comments, key order) are safe and do not affect the hash.
+
+fold_seed: 20260419
+alpha:
+  - 0.0
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.4
+  - 0.5
+  - 0.6
+  - 0.7
+  - 0.8
+  - 0.9
+  - 1.0
+k_ratio:
+  - 0.001
+  - 0.005
+  - 0.01
+  - 0.05
+  - 0.10
+  - 0.20
+stat:
+  - topk_mean
+  - topk_max
+  - percentile_95
+  - topk_mean_times_one_plus_std

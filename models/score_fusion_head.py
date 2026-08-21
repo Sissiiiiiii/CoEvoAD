@@ -1,11 +1,7 @@
-"""Pure score-fusion head — the engine shared by the live metric path
-(``models/metric_and_visualization.py``) and the offline replay tool
-(``tools/replay_score_fusion.py``).
+"""Pure score-fusion head, used by the live metric path
+(``models/metric_and_visualization.py``).
 
-Spec: docs/superpowers/specs/2026-04-19-source-calibrated-score-fusion-design.md
-  - §2.1 current pipeline (the recipe being mirrored)
-  - §3.2 calibration objective (per-class normalize → per-class AUROC → mean)
-  - §5.1 stat function definitions
+Calibration objective: per-class normalize -> per-class AUROC -> mean.
 """
 from __future__ import annotations
 
@@ -82,7 +78,7 @@ def apply_score_fusion(
       - ``anomaly_maps``: list of (H, W) float32 ndarrays
       - ``cls_names``: list of str (per image)
       - ``gt_sp``: list of int (per image)
-      - ``pr_sp``: list of float (image_score_input — see spec §2.4)
+      - ``pr_sp``: list of float (image_score_input)
     """
     if score_fusion_config is not None:
         for required in ("alpha", "k_ratio", "stat"):

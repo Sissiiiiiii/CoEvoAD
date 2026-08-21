@@ -193,7 +193,7 @@ def calcuate_metric_pixel(results, obj_list, logger, alpha = 0.9, sigm = 4, args
     iou_list = []
     iou_list_ls = []
     table_best_the = []
-    # Spec 2026-04-19 §3, §6.2: when calibrated config is supplied, precompute the
+    # When a calibrated config is supplied, precompute the
     # fused per-class scores via the shared engine. None → legacy inline path.
     _fusion_out = (
         apply_score_fusion(results, obj_list, score_fusion_config=score_fusion_config)
@@ -267,7 +267,7 @@ def calcuate_metric_pixel(results, obj_list, logger, alpha = 0.9, sigm = 4, args
             f1_scores = (2 * precisions * recalls) / (precisions + recalls + 1e-6)
             best_threshold_cls = thresholds[np.argmax(f1_scores)]
             f1_sp = np.max(f1_scores[np.isfinite(f1_scores)])
-            # 兼容历史字段名：aupro_sp 实际按 image-level PR-AUC 计算。
+            # Legacy field name kept for compatibility: aupro_sp is actually image-level PR-AUC.
             aupro_sp = auc(recalls, precisions)
 
 
@@ -352,7 +352,7 @@ def calcuate_metric_pixel(results, obj_list, logger, alpha = 0.9, sigm = 4, args
     
     results = tabulate(table_ls, headers=['objects', 'auroc_px', 'aupro_px', 'ap_px', 'f1_px', 'iou',"auroc_sp","aupro_sp","ap_sp", "f1_sp", "threshold"], tablefmt="pipe")
     headers = ['objects', 'auroc_px', 'aupro_px', 'ap_px', 'f1_px', 'iou', "auroc_sp", "aupro_sp", "ap_sp", "f1_sp", "threshold"]
-    # 修复路径问题：直接使用args.save_path，不要添加./前缀
+    # Use args.save_path directly; do not prepend "./".
     csv_file_path = f'{args.save_path}/results_{args.dataset}.csv'
     _write_results_csv(table_ls, headers, csv_file_path)
     logger.info("\n%s", results)
@@ -408,7 +408,7 @@ def calcuate_metric_image(results, obj_list, logger, alpha = 0.9, sigm = 4, args
         f1_scores = (2 * precisions * recalls) / (precisions + recalls)
         best_threshold_cls = thresholds[np.argmax(f1_scores)]
         f1_sp = np.max(f1_scores[np.isfinite(f1_scores)])
-        # 兼容历史字段名：aupro_sp 实际按 image-level PR-AUC 计算。
+        # Legacy field name kept for compatibility: aupro_sp is actually image-level PR-AUC.
         aupro_sp = auc(recalls, precisions)
 
 
@@ -461,7 +461,7 @@ def calcuate_metric_image(results, obj_list, logger, alpha = 0.9, sigm = 4, args
     
     results = tabulate(table_ls, headers=['objects', 'auroc_px', 'aupro_px', 'ap_px', 'f1_px', 'iou',"auroc_sp","aupro_sp","ap_sp", "f1_sp", "threshold"], tablefmt="pipe")
     headers = ['objects', 'auroc_px', 'aupro_px', 'ap_px', 'f1_px', 'iou', "auroc_sp", "aupro_sp", "ap_sp", "f1_sp", "threshold"]
-    # 修复路径问题：直接使用args.save_path，不要添加./前缀
+    # Use args.save_path directly; do not prepend "./".
     csv_file_path = f'{args.save_path}/results_{args.dataset}.csv'
     _write_results_csv(table_ls, headers, csv_file_path)
     logger.info("\n%s", results)

@@ -67,7 +67,7 @@ def compute_soft_mix_alpha(
 
     if opts.formula == "F_A":
         return (a_sim + a_margin + a_H) / 3.0
-    raise NotImplementedError(f"formula {opts.formula!r} not implemented this round")
+    raise NotImplementedError(f"formula {opts.formula!r} is not implemented")
 
 
 def _blend_score_and_map(
@@ -104,10 +104,10 @@ def _blend_score_and_map(
 
 
 def _dump_debug_scores(path, results) -> None:
-    """Write per-image scores/classes/gt/path to JSON for regression smoke tests.
+    """Write per-image scores/classes/gt/path to JSON for regression checks.
 
-    No-op if ``path`` is empty or None. Only serializes the four fixed keys the
-    R1/R2 comparison scripts rely on so the payload stays schema-stable.
+    No-op if ``path`` is empty or None. Only the four fixed keys are serialized,
+    so the payload stays schema-stable.
     """
     if not path:
         return

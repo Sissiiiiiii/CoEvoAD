@@ -147,7 +147,7 @@ class MultiheadAttention(nn.Module):
         self.batch_first = batch_first 
         self.head_dim = embed_dim // num_heads 
 
-        assert self.head_dim * num_heads == self.embed_dim, "embed_dim 必须要整除 num_heads"
+        assert self.head_dim * num_heads == self.embed_dim, "embed_dim must be divisible by num_heads"
 
         if self._qkv_same_embed_dim is False:
             self.q_proj_weight = Parameter(torch.empty((embed_dim, embed_dim), **factory_kwards))
@@ -236,8 +236,8 @@ class MultiheadAttention(nn.Module):
         """
         B, Nt, E = q.shape
         q = q / math.sqrt(E)
-        # (B, Nt, E) x (B, E, Ns) -> (B, Nt, Ns)  这个B
-        attn = torch.bmm(q, k.transpose(-2, -1))  #用这个方法实现转置
+        # (B, Nt, E) x (B, E, Ns) -> (B, Nt, Ns)
+        attn = torch.bmm(q, k.transpose(-2, -1))  # transpose via bmm
         if attn_mask is not None:
             attn += attn_mask
         attn = torch.nn.functional.softmax(attn, dim=-1)

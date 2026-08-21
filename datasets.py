@@ -32,7 +32,7 @@ class Makedataset():
 											mask_guided_crop_prob=self.mask_guided_crop_prob)
 		obj_list = dataset.get_cls_names()
 
-		# 优化的数据加载器配置
+		# Tuned dataloader settings
 		dataloader = torch.utils.data.DataLoader(
 			dataset,
 			batch_size=batchsize,
@@ -40,7 +40,7 @@ class Makedataset():
 			num_workers=num_workers,
 			pin_memory=pin_memory,
 			persistent_workers=persistent_workers and num_workers > 0,
-			prefetch_factor=prefetch_factor if num_workers > 0 else None  # 🔧 修复：单进程时必须是None
+			prefetch_factor=prefetch_factor if num_workers > 0 else None  # must be None when running single-process
 		)
 
 		return dataloader, obj_list
@@ -91,7 +91,7 @@ class MyDataset(data.Dataset):
 			meta_path = f'{self.root}/meta_{self.dataset}.json'
 			with open(meta_path, 'r') as f:
 				meta_root = json.load(f)
-			# split_override 解耦：mode 控制增强，effective_split 控制加载哪个 JSON key
+			# split_override decoupling: mode controls augmentation, effective_split controls which JSON key is loaded
 			effective_split = split_override if split_override else mode
 			if effective_split in meta_root:
 				split_key = effective_split
@@ -290,7 +290,7 @@ class MyDataset(data.Dataset):
 		img_mask = np.array(img_mask)
 		img = np.array(img)[:, :, ::-1]
 
-		# Mask-guided crop: 对异常样本概率性放大缺陷区域
+		# Mask-guided crop: probabilistically zoom into the defect region for anomalous samples
 		if self.mode == "train" and np.sum(img_mask) > 0 and np.random.rand() < self.mask_guided_crop_prob:
 			crop_size = min(img.shape[0], img.shape[1]) // 2
 			img, img_mask = self.MyCrop(img, img_mask, (crop_size, crop_size))

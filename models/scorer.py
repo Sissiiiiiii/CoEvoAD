@@ -141,12 +141,12 @@ class PromptBankScorer(AnomalyScorer):
             )
 
     def _resolve_stage(self) -> int:
-        """从 checkpoint 路径推断推理 stage。
+        """Infer the inference stage from the checkpoint path.
 
-        - stage1_final.pth → 1  (fuse/image_mapping 未训练)
+        - stage1_final.pth → 1  (fuse/image_mapping not trained)
         - two_stage_final.pth → 2
         - epoch_post_*_1.pth → 1, epoch_post_*_2.pth → 2
-        - 其他 → 2 (默认)
+        - otherwise -> 2 (default)
         """
         ckpt = getattr(self.args, "checkpoint_path", "")
         if not ckpt:
@@ -253,7 +253,7 @@ class PromptBankScorer(AnomalyScorer):
         return [candidate] * batch_size, [candidate] * batch_size
 
     def clear_baseline_cache(self):
-        """清空 baseline embedding 缓存（切换类别时调用）"""
+        """Clear the baseline embedding cache (called when switching category)."""
         self._baseline_emb_cache.clear()
 
     def _encode_fixed_clip_prompts(
@@ -364,7 +364,7 @@ class PromptBankScorer(AnomalyScorer):
         return self.evaluate_candidate(prepared, candidate, role, baseline)["image_scores"]
 
     def _get_cached_baseline_emb(self, prompt: str, role_label: str) -> Optional[torch.Tensor]:
-        """返回缓存的 baseline embedding，若未命中返回 None"""
+        """Return the cached baseline embedding, or None on a cache miss."""
         cache_key = f"{role_label}:{prompt}"
         return self._baseline_emb_cache.get(cache_key)
 
@@ -383,12 +383,12 @@ class PromptBankScorer(AnomalyScorer):
         batch_size = image_features.shape[0]
         prompts_n, prompts_a = self._build_role_prompts(candidate, baseline, role, batch_size)
         with torch.no_grad():
-            # 尝试使用 baseline embedding 缓存加速
+            # Try to speed things up with the baseline embedding cache
             baseline_role = "abnormal" if role == "normal" else "normal"
             cached = self._get_cached_baseline_emb(baseline, baseline_role)
             if (cached is not None
                     and not self.text_encoder_accepts_prompt_bias):
-                # 缓存命中：迁移到正确 device，只编码 candidate 侧
+                # Cache hit: move to the right device and encode only the candidate side
                 if cached.device != image_features.device:
                     cached = cached.to(image_features.device, non_blocking=True)
                 if role == "normal":
@@ -404,9 +404,9 @@ class PromptBankScorer(AnomalyScorer):
                     text_embeddings = torch.cat([baseline_emb, cand_emb], dim=1)
                 text_embeddings = F.normalize(text_embeddings, dim=-1, eps=1e-12)
             else:
-                # 无缓存或 legacy 模型：完整编码
+                # No cache, or a legacy model: encode everything
                 text_embeddings = self._encode_prompt_pair(prompts_n, prompts_a, image_features=image_features)
-                # 缓存 baseline 侧 embedding
+                # Cache the baseline-side embedding
                 if not self.text_encoder_accepts_prompt_bias:
                     half = text_embeddings.size(1) // 2
                     if role == "normal":

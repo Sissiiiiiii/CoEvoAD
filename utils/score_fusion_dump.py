@@ -1,10 +1,8 @@
 """Dump top-K raw anomaly values + image-level fusion inputs for offline
 score-fusion calibration.
 
-Spec: docs/superpowers/specs/2026-04-19-source-calibrated-score-fusion-design.md
-  - §3.3 inputs
-  - §7.1 schema (float32, top-65,536 per image, descending)
-  - §7.3 pre-gaussian semantic
+Schema: float32, top-65,536 values per image, in descending order
+(pre-Gaussian semantic scores).
 """
 from __future__ import annotations
 
@@ -19,7 +17,7 @@ def dump_score_fusion_inputs(
     results: Dict[str, Any],
     k_topk: int = 65536,
 ) -> None:
-    """Write a compressed npz with the spec §7.1 schema. No-op if path is empty.
+    """Write a compressed npz in the schema above. No-op if path is empty.
 
     Pre-conditions:
       - results-pro['anomaly_maps'][i] is float32 ndarray of shape (H, W).
@@ -47,7 +45,7 @@ def dump_score_fusion_inputs(
         amap = results["anomaly_maps"][i]
         if amap.dtype != np.float32:
             raise ValueError(
-                f"anomaly_maps[{i}] dtype must be float32 (spec §7.1); got {amap.dtype}. "
+                f"anomaly_maps[{i}] dtype must be float32; got {amap.dtype}. "
                 f"This dtype check exists to prevent fp16 quantization breaking R4 matched replay."
             )
         flat = amap.reshape(-1)

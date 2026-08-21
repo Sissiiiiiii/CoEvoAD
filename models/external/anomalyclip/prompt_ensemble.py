@@ -120,14 +120,14 @@ class AnomalyCLIP_PromptLearner(nn.Module):
             ctx_init_neg = ctx_init_neg.replace("_", " ")
             n_ctx_pos = len(ctx_init_pos.split(" "))
             n_ctx_neg = len(ctx_init_neg.split(" "))
-            #初始化text成bpd编码
+            # tokenize text into BPE ids
             prompt_pos = tokenize(ctx_init_pos).to(tok_device)
             prompt_neg = tokenize(ctx_init_neg).to(tok_device)
             with torch.no_grad():
-                #生成相应的text embedding
+                # generate the corresponding text embedding
                 embedding_pos = clip_model.token_embedding(prompt_pos).type(dtype)
                 embedding_neg = clip_model.token_embedding(prompt_neg).type(dtype)
-            #这些是去除出来EOS 和 # CLS, EOS， 获得可学习的textual prompt
+            # strip SOS/EOS to obtain the learnable textual prompt
             ctx_vectors_pos = embedding_pos[0, 1: 1 + n_ctx_pos, :]
             ctx_vectors_neg = embedding_neg[0, 1: 1 + n_ctx_neg, :]
             prompt_prefix_pos = ctx_init_pos
@@ -145,7 +145,7 @@ class AnomalyCLIP_PromptLearner(nn.Module):
             # Random Initialization
             if True:
                 pass  # Initializing class-specific contexts
-                #这里是cls是类的个数，n_ctx_pos代表learnable token的长度，ctx_dim表示prompt的dimension
+                # cls = number of classes, n_ctx_pos = length of learnable tokens, ctx_dim = prompt dimension
                 ctx_vectors_pos = torch.empty(self.n_cls, self.normal_num, n_ctx_pos, ctx_dim, dtype=dtype)
                 ctx_vectors_neg = torch.empty(self.n_cls, self.anormaly_num, n_ctx_neg, ctx_dim, dtype=dtype)
             else:
@@ -185,7 +185,7 @@ class AnomalyCLIP_PromptLearner(nn.Module):
             tokenized_prompts_neg.append(tokenize(p_neg))
         tokenized_prompts_pos = torch.cat(tokenized_prompts_pos).to(tok_device)
         tokenized_prompts_neg = torch.cat(tokenized_prompts_neg).to(tok_device)
-        #生成相应的text embedding
+        # generate the corresponding text embedding
         with torch.no_grad():
             embedding_pos = clip_model.token_embedding(tokenized_prompts_pos).type(dtype)
             embedding_neg = clip_model.token_embedding(tokenized_prompts_neg).type(dtype)

@@ -1,11 +1,11 @@
 """
-Universal Stage 2 — checkpoint-aware 的模型无关 Prompt 进化优化
+Universal Stage 2 - checkpoint-aware, model-agnostic prompt evolution.
 
-使用 AnomalyScorer 抽象接口，支持确定性 Prompt Bank 和任意外部模型。
-Stage2 默认目标为 image+pixel 复合指标，并支持 checkpoint-aware custom scorer。
+Uses the AnomalyScorer abstraction, supporting a deterministic Prompt Bank and arbitrary external models.
+Stage2 optimizes a combined image+pixel objective by default and supports checkpoint-aware custom scorers.
 
-使用方法:
-    # Stage2 主线：纯 CLIP transfer scorer
+Usage:
+    # Stage2 mainline: pure CLIP transfer scorer
     python optimize_universal.py --scorer_type clip_transfer --dataset visa \
         --use_coevo_prompt --evo_dual_branch
 
@@ -110,7 +110,7 @@ def setup_logger(save_path, log_filename="result_universal_stage2.txt"):
 
 
 def _enforce_transfer_mainline(args, logger=None):
-    """记录 Stage2 主线语义：核心不依赖具体模型，checkpoint 由 scorer 自己解释。"""
+    """Record the Stage2 mainline semantics: the core is model-agnostic and the checkpoint is interpreted by the scorer itself."""
     scorer_type = getattr(args, "scorer_type", "prompt_bank")
     msg = (
         f"Stage2 mainline: scorer='{scorer_type}' "
@@ -339,7 +339,7 @@ def _completed_stage2_categories(optimized_rules: Dict[str, Dict[str, str]]) -> 
 
 
 def _validate_transfer_regularizer_args(args, parser=None):
-    """校验 CDACE / CCTO 互斥关系与 CCTO 前置条件。"""
+    """Validate CDACE / CCTO mutual exclusion and the CCTO preconditions."""
     if getattr(args, "adaptive_ccto_alpha", False) and not getattr(args, "ccto", False):
         msg = "--adaptive_ccto_alpha requires --ccto."
         if parser is not None:
@@ -643,7 +643,7 @@ def _compute_ccto_diag_stats(
 
 
 def _load_model_config(args):
-    """加载模型配置。"""
+    """Load the model configuration."""
     if getattr(args, "scorer_type", "prompt_bank") == "clip_transfer":
         return
     config_path = getattr(args, "config_path", "")
@@ -1089,7 +1089,7 @@ def _evaluate_candidates_on_cache_map_macro_metrics(
     use_coevo: bool,
     objective_override: Optional[str] = None,
 ) -> Tuple[List[Dict[str, float]], int]:
-    """逐类别评估候选，并对类别分数做 macro-average。返回 per-candidate metrics dict 列表。"""
+    """Evaluate candidates per category and macro-average the scores. Returns a list of per-candidate metrics dicts."""
     if not candidates:
         return [], 0
 
@@ -1769,9 +1769,9 @@ def _build_shared_streaming_dataloader(
     args,
     category: str,
 ) -> Any:
-    """Shared bank / shared alpha-search 专用 DataLoader。
+    """DataLoader dedicated to the shared bank / shared alpha-search.
 
-    强制单进程，避免 pt_data_worker 在 shared 路径上放大 CPU RAM。
+    Forced single-process, so pt_data_worker does not inflate CPU RAM on the shared path.
     """
     dataloader, _ = make_dataset.mask_dataset(
         name=args.dataset,
@@ -1793,7 +1793,7 @@ def _build_shared_alpha_eval_cache(
     device: torch.device,
     max_batches: int = 8,
 ) -> List[Dict[str, Any]]:
-    """构建 shared alpha-search 用的紧凑 eval cache，并立即 offload 到 CPU。"""
+    """Build a compact eval cache for the shared alpha-search and offload it to CPU immediately."""
     dataloader = _build_shared_streaming_dataloader(
         make_dataset=make_dataset,
         args=args,
@@ -1829,7 +1829,7 @@ def _count_shared_alpha_cached_batches(
     categories: List[str],
     max_batches: int = 8,
 ) -> int:
-    """估计 shared alpha-search 总缓存 batch 数，不触发特征提取。"""
+    """Estimate the total number of cached batches for the shared alpha-search, without triggering feature extraction."""
     total_batches = 0
     for category in categories:
         dataloader = _build_shared_streaming_dataloader(
@@ -1850,12 +1850,12 @@ def _build_shared_prototype_bank_streaming(
     device: torch.device,
     logger,
 ):
-    """流式构建 shared prototype bank。
+    """Build the shared prototype bank in a streaming fashion.
 
-    每次只处理一个类别：
-      - DataLoader 强制单进程
-      - scorer.prepare_images() 后立即把 patch tokens 灌进 reservoir
-      - 完成当前类别后立刻并入全局 reservoir 并释放临时显存
+    One category at a time:
+      - the DataLoader is forced single-process
+      - patch tokens are pushed into the reservoir right after scorer.prepare_images()
+      - when a category finishes it is merged into the global reservoir and its temporary GPU memory is freed
     """
     from models.prototype_bank import PrototypeBank, SharedPrototypeReservoirBuilder
 
@@ -1924,7 +1924,7 @@ def _build_shared_prototype_bank_streaming(
 # ---------------------------------------------------------------------------
 
 def _to_cpu_recursive(obj):
-    """递归地将 tensor / list / tuple 移到 CPU。"""
+    """Recursively move tensors / lists / tuples to CPU."""
     if isinstance(obj, torch.Tensor):
         return obj.cpu()
     if isinstance(obj, list):
@@ -1935,7 +1935,7 @@ def _to_cpu_recursive(obj):
 
 
 def _to_device_recursive(obj, device: torch.device):
-    """递归地将 tensor / list / tuple 移到指定 device。"""
+    """Recursively move tensors / lists / tuples to the given device."""
     if isinstance(obj, torch.Tensor):
         return obj.to(device, non_blocking=True)
     if isinstance(obj, list):
@@ -1946,7 +1946,7 @@ def _to_device_recursive(obj, device: torch.device):
 
 
 def _offload_eval_cache(eval_cache: List[Dict[str, Any]]) -> None:
-    """将 eval_cache 中的 GPU tensor (prepared) 迁移到 CPU，释放显存。"""
+    """Move prepared GPU tensors in eval_cache to CPU to free GPU memory."""
     for entry in eval_cache:
         prepared = entry.get("prepared")
         if prepared is not None:
@@ -1954,7 +1954,7 @@ def _offload_eval_cache(eval_cache: List[Dict[str, Any]]) -> None:
 
 
 def _reload_eval_cache(eval_cache: List[Dict[str, Any]], device: torch.device) -> None:
-    """将 eval_cache 中的 tensor 迁移回 GPU。"""
+    """Move tensors in eval_cache back to GPU."""
     for entry in eval_cache:
         prepared = entry.get("prepared")
         if prepared is not None:
@@ -1966,7 +1966,7 @@ def _reload_eval_cache(eval_cache: List[Dict[str, Any]], device: torch.device) -
 # ---------------------------------------------------------------------------
 
 def build_optimizer(args, logger):
-    """构建 Stage2 Prompt 优化器。"""
+    """Build the Stage2 prompt optimizer."""
     use_coevo = getattr(args, "use_coevo_prompt", False)
 
     if use_coevo:
@@ -2038,7 +2038,7 @@ def build_optimizer(args, logger):
 
 
 # ---------------------------------------------------------------------------
-# Scoring Callback — 复合目标（image + pixel）
+# Scoring Callback - combined objective (image + pixel)
 # ---------------------------------------------------------------------------
 
 def build_scoring_callback(
@@ -2055,18 +2055,18 @@ def build_scoring_callback(
     ccto_per_cat_cache=None,
     ccto_scope="abnormal_only",
 ):
-    """构建 scoring_callback(candidates, role) -> List[float]。
+    """Build scoring_callback(candidates, role) -> List[float].
 
-    三种模式（互斥，优先级 CCTO > CDACE > 纯源域）：
-    1. CCTO: ccto_per_cat_cache 非空 → 逐类别评估 + macro-average
+    Three mutually exclusive modes (priority CCTO > CDACE > source-only):
+    1. CCTO: ccto_per_cat_cache non-empty -> per-category evaluation + macro-average
        fitness = α * source_score + (1-α) * mean(per_cat_scores)
-    2. CDACE: target_cache 非空 → pooled 评估
+    2. CDACE: target_cache non-empty -> pooled evaluation
        fitness = α * source_score + (1-α) * target_score
-    3. 纯源域: 仅 source_score
+    3. source-only: source_score alone
 
-    不对称目标设计：source 侧按 args.stage2_objective（含 pixel），
-    cross-category / target 侧强制 target_objective（默认 image_only）
-    只拉 image-level，避免 pixel mask 质量差时污染进化方向。
+    Asymmetric objective: the source side follows args.stage2_objective (including pixel), while the
+    cross-category / target side is forced to target_objective (image_only by default), using
+    image-level signal only so poor pixel masks cannot pollute the search direction.
     """
 
     _asym_b_enable = bool(getattr(args, "asym_b_enable", False))
@@ -2228,7 +2228,7 @@ def build_scoring_callback(
                             )
                         scores.append(blended)
                 elif _use_cdace:
-                    # CDACE: pooled 评估
+                    # CDACE: pooled evaluation
                     tgt_metrics = _evaluate_candidates_on_cache(
                         scorer=scorer,
                         optimizer=optimizer,
@@ -2309,7 +2309,7 @@ def build_rerank_callback(
     base_prompt,
     args,
 ):
-    """构建最终 top-k 重排回调，按 source split mean IoU 选优。"""
+    """Build the final top-k rerank callback, selecting by mean IoU on the source split."""
 
     def rerank_callback(candidates, role=None):
         rerank_scores = []
@@ -2529,9 +2529,9 @@ def _build_prototype_augmented_scorer(
     proto_banks_to_save: Dict[str, Any],
     logger,
 ):
-    """为当前类构建 prototype bank 并包装 scorer。
+    """Build the prototype bank for the current category and wrap the scorer.
 
-    返回 (augmented_scorer, updated_proto_banks_to_save)。
+    Returns (augmented_scorer, updated_proto_banks_to_save).
     """
     from models.prototype_bank import (
         PrototypeAugmentedScorer,
@@ -2557,7 +2557,7 @@ def _build_prototype_augmented_scorer(
 
     logger.info("  Prototype bank: %s", proto_bank.summary)
 
-    # Alpha 确定
+    # determine alpha
     alpha_mode = getattr(args, "proto_alpha_mode", "fixed")
     if alpha_mode == "grid_search":
         alpha_img, alpha_px = _grid_search_proto_alpha(
@@ -2590,7 +2590,7 @@ def _grid_search_proto_alpha(
     args,
     logger,
 ) -> Tuple[float, float]:
-    """在 eval_cache 上网格搜索最优 fusion alpha。"""
+    """Grid-search the best fusion alpha on eval_cache."""
     from models.prototype_bank import PrototypeAugmentedScorer
 
     alpha_img_candidates = [0.1, 0.2, 0.3, 0.4, 0.5]
@@ -2641,11 +2641,11 @@ def _grid_search_shared_alpha(
     logger,
     max_batches: int = 8,
 ) -> Tuple[float, float]:
-    """跨所有类别网格搜索共享 prototype bank 的最优 fusion alpha。
+    """Grid-search the best fusion alpha for the shared prototype bank across all categories.
 
-    这里按类别分别计算 objective，再做跨类别平均。
-    这样 shared alpha-search 的内存峰值保持在“单类别 8 batches”
-    量级，避免把所有类别的 pixel maps 一次性拼接到内存里。
+    The objective is computed per category and then averaged across categories, which keeps the
+    peak memory of the shared alpha-search at the scale of a single category's 8 batches, instead
+    of concatenating the pixel maps of every category at once.
     """
     from models.prototype_bank import PrototypeAugmentedScorer
     import gc
@@ -2738,9 +2738,9 @@ def _grid_search_shared_alpha(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    # NOTE: 这里用 per-category mean 而非全局拼接后算一次指标。
-    # 语义上更接近 cross-class mean（和 shared bank _score_pool 一致），
-    # 且避免了把所有类别 pixel maps 一次性拼进内存。
+    # NOTE: this uses a per-category mean rather than one metric over a global concatenation.
+    # It is semantically closer to a cross-class mean (matching shared bank _score_pool) and
+    # avoids concatenating the pixel maps of every category into memory at once.
     for (a_img, a_px), score_sum in score_sums.items():
         score = score_sum / max(1, score_counts[(a_img, a_px)])
         if score > best_score:
@@ -2780,14 +2780,14 @@ def run_stage2_universal(args):
     logger.info("Universal Stage 2 optimization")
     logger.info("=" * 60)
 
-    # 构建 scorer
+    # build the scorer
     scorer = build_scorer(args, device)
     logger.info("Scorer: %s", type(scorer).__name__)
 
-    # 构建 optimizer
+    # build the optimizer
     evo_optimizer = build_optimizer(args, logger)
 
-    # 准备评估数据
+    # prepare evaluation data
     preprocess = _transform_test(args.image_size)
     stage2_split = getattr(args, "stage2_split", "test")
     if stage2_split not in ("train", "val", "test"):
@@ -2827,7 +2827,7 @@ def run_stage2_universal(args):
         args.evo_population, args.evo_generations, args.evo_topk,
     )
 
-    # 类别迭代优化
+    # per-category optimization loop
     use_coevo = getattr(args, "use_coevo_prompt", False)
     optimized_rules = {"normal": {}, "abnormal": {}, "shared": {}}
     proto_banks_to_save: Dict[str, Any] = {}  # {category: (bank, alpha_img, alpha_px)}
@@ -2872,7 +2872,7 @@ def run_stage2_universal(args):
         from models.qd_archive import QDArchive
         logger.info("QD archive enabled: bins=%d bd=%s", _qd_bins, _qd_bd_names)
 
-    # ── 共享 Prototype Bank: 预先构建（所有类别共用一个 bank） ──
+    # -- Shared prototype bank: built up front (one bank shared by all categories) --
     shared_augmented_scorer = None
     _use_shared_bank = (
         getattr(args, "shared_prototype_bank", False)
@@ -2895,7 +2895,7 @@ def run_stage2_universal(args):
         shared_bank.to(device)
         logger.info("Shared prototype bank moved to device: %s", device)
 
-        # Phase B: 小型 alpha grid search cache（唯一允许跨类别短时保留的 prepared cache）
+        # Phase B: small alpha grid-search cache (the only prepared cache allowed to persist briefly across categories)
         alpha_mode = getattr(args, "proto_alpha_mode", "fixed")
         if alpha_mode == "grid_search":
             logger.info("Building compact alpha-search caches (max 8 batches/category)...")
@@ -2916,7 +2916,7 @@ def run_stage2_universal(args):
             alpha_img = float(getattr(args, "proto_alpha_image", 0.3))
             alpha_px = float(getattr(args, "proto_alpha_pixel", 0.5))
 
-        # Phase C: 包装为增强 scorer
+        # Phase C: wrap into the augmented scorer
         from models.prototype_bank import PrototypeAugmentedScorer
         shared_augmented_scorer = PrototypeAugmentedScorer(
             base_scorer=scorer,
@@ -2926,7 +2926,7 @@ def run_stage2_universal(args):
             image_size=int(getattr(args, "image_size", 518)),
         )
 
-        # 保存共享 bank
+        # save the shared bank
         shared_proto_path = os.path.join(args.save_path, "shared_prototype_bank.pt")
         shared_bank.save(shared_proto_path)
         shared_meta = {
@@ -2947,7 +2947,7 @@ def run_stage2_universal(args):
         logger.info("Shared prototype bank saved: %s (alpha_img=%.2f, alpha_px=%.2f)",
                      shared_proto_path, alpha_img, alpha_px)
 
-    # ── CDACE: 构建目标域 eval cache ──
+    # -- CDACE: build the target-domain eval cache --
     cdace_target_cache = None
     _cdace_target_ds = getattr(args, "cdace_target_dataset", "")
     if _cdace_target_ds:
@@ -2978,7 +2978,7 @@ def run_stage2_universal(args):
 
     _cdace_alpha = float(getattr(args, "cdace_alpha", 1.0))
     if cdace_target_cache is None:
-        _cdace_alpha = 1.0  # 无目标域 cache 时退化为纯源域
+        _cdace_alpha = 1.0  # without a target-domain cache, fall back to source-only
     _ccto_scope_effective = _resolve_effective_ccto_scope(
         args,
         requested_scope=getattr(args, "ccto_scope", "abnormal_only"),
@@ -2995,7 +2995,7 @@ def run_stage2_universal(args):
             float(_asym_cfg["kappa_abnormal"]),
         )
 
-    # ── CCTO: 构建 source 域 per-category eval cache ──
+    # -- CCTO: build the per-category eval cache on the source domain --
     ccto_per_cat_cache: Dict[str, List[Dict[str, Any]]] = {}
     if getattr(args, "ccto", False):
         _ccto_batches = int(getattr(args, "ccto_batches", 2))
@@ -3059,11 +3059,11 @@ def run_stage2_universal(args):
             continue
         base_prompt = f"X {category}"
 
-        # 切换类别时清空 baseline embedding 缓存
+        # clear the baseline embedding cache when switching category
         if hasattr(scorer, "clear_baseline_cache"):
             scorer.clear_baseline_cache()
 
-        # 正式搜索阶段按类懒构建 full eval cache；不复用 shared bank 构建缓存
+        # During the actual search, build the full eval cache lazily per category; do not reuse the shared-bank build cache
         full_eval_cache = _build_eval_cache(
             make_dataset=make_dataset,
             scorer=scorer,
@@ -3089,8 +3089,8 @@ def run_stage2_universal(args):
             getattr(args, "stage2_objective", "image_pixel"),
         )
 
-        # ── CCTO: 组装当前类别的 per-category cross-cache (排除自身) ──
-        _active_target_cache = cdace_target_cache  # 仅 CDACE 使用
+        # -- CCTO: assemble the per-category cross-cache for the current category (excluding itself) --
+        _active_target_cache = cdace_target_cache  # CDACE only
         _active_alpha = _cdace_alpha
         _active_ccto_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None
         _alpha_trace: Optional[Dict[str, Any]] = None
@@ -3142,7 +3142,7 @@ def run_stage2_universal(args):
                 category,
             )
 
-        # ── Prototype bank: 构建 + 可选 alpha grid search + 包装 scorer ──
+        # -- Prototype bank: build + optional alpha grid search + wrap the scorer --
         scorer_for_search = scorer
         if shared_augmented_scorer is not None:
             scorer_for_search = shared_augmented_scorer
@@ -3157,7 +3157,7 @@ def run_stage2_universal(args):
             )
 
         if use_coevo and args.evo_dual_branch:
-            # CoEvo 双分支联合优化
+            # CoEvo joint dual-branch optimization
             callback = build_scoring_callback(
                 scorer_for_search, evo_optimizer, search_cache, base_prompt,
                 args, role_type="normal", use_coevo=True,
@@ -3241,7 +3241,7 @@ def run_stage2_universal(args):
                             _active_alpha, len(_active_target_cache))
 
         elif args.evo_dual_branch:
-            # 标准双分支（分别优化）
+            # standard dual-branch (optimized separately)
             cb_n = build_scoring_callback(
                 scorer_for_search, evo_optimizer, search_cache, base_prompt,
                 args, role_type="normal", use_coevo=False,
@@ -3329,7 +3329,7 @@ def run_stage2_universal(args):
             )
 
         else:
-            # 共享优化
+            # shared optimization
             cb = build_scoring_callback(
                 scorer_for_search, evo_optimizer, search_cache, base_prompt,
                 args, role_type=None, use_coevo=use_coevo,
@@ -3396,14 +3396,14 @@ def run_stage2_universal(args):
             1 if _is_alpha_collapsed(runtime_stats, args) else 0,
         )
 
-    # 释放 CCTO cache
+    # free the CCTO cache
     if ccto_per_cat_cache:
         for _cc in ccto_per_cat_cache.values():
             _offload_eval_cache(_cc)
         ccto_per_cat_cache.clear()
         logger.info("CCTO: cross-category caches released")
 
-    # 保存 prototype banks
+    # save prototype banks
     if proto_banks_to_save:
         proto_path = (
             getattr(args, "proto_save_path", "") or
@@ -3413,7 +3413,7 @@ def run_stage2_universal(args):
         save_all_banks(proto_banks_to_save, proto_path)
         logger.info("Prototype banks saved: %s (%d categories)", proto_path, len(proto_banks_to_save))
 
-    # 保存规则
+    # save the rules
     rules_path = os.path.join(args.save_path, "optimized_prompt_rules.json")
     with open(rules_path, "w", encoding="utf-8") as f:
         json.dump(optimized_rules, f, indent=2, ensure_ascii=False)
@@ -3430,7 +3430,7 @@ def run_stage2_universal(args):
                 archive.save(os.path.join(qd_dir, f"{cat}_{role_name}.json"))
         logger.info("QD archives saved: %d categories to %s", len(_qd_archives), qd_dir)
 
-    # 构建 shared bank（跨类平均 AUROC + MMR）
+    # build the shared bank (cross-category mean AUROC + MMR)
     shared_bank_path = os.path.join(args.save_path, "shared_prompt_bank.json")
     try:
         shared_bank = _build_shared_bank(
@@ -3489,7 +3489,7 @@ def build_parser():
     parser.add_argument("--pretrained_path", type=str,
                         default="./pretrained_weight/ViT-L-14-336px.pt")
     parser.add_argument("--checkpoint_path", type=str, default="",
-                        help="Stage2 使用的模型权重路径；是否必需由 scorer 决定")
+                        help="Model weight path used by Stage2; whether it is required depends on the scorer")
 
     parser.add_argument("--prompt_context_len", type=int, default=5)
     parser.add_argument("--prompt_num", type=int, default=8)
@@ -3530,37 +3530,37 @@ def build_parser():
     parser.add_argument("--evo_cvar_k", type=int, default=3,
                         help="Number of worst categories to average when evo_fitness_agg=cvar (>=1)")
     parser.add_argument("--candidate_batch_size", type=int, default=2,
-                        help="Stage2 每次并行评估的 candidate 数")
+                        help="Number of candidates evaluated in parallel per Stage2 step")
     parser.add_argument("--zero_shot_scoring", dest="zero_shot_scoring", action="store_true",
                         help="Compatibility mode for legacy PFL-style text encoders/checkpoints: replace latent prompt bias with zeros")
     parser.add_argument("--no_zero_shot_scoring", dest="zero_shot_scoring", action="store_false",
                         help="If a legacy PFL-compatible scorer/model is present, use its learned latent prompt bias")
     parser.set_defaults(zero_shot_scoring=False)
     parser.add_argument("--shared_bank_eval_batches", type=int, default=2,
-                        help="构建 shared bank 时每类评估批次数上限")
+                        help="Max evaluation batches per category when building the shared bank")
     parser.add_argument("--shared_bank_max_candidates_per_role", type=int, default=48,
-                        help="构建 shared bank 时每个 role 的候选上限")
+                        help="Max candidates per role when building the shared bank")
     parser.add_argument("--shared_bank_size", type=int, default=4,
-                        help="构建 shared bank 时最终保留的候选对数量")
+                        help="Number of candidate pairs finally kept when building the shared bank")
     parser.add_argument("--stage2_objective", type=str, default="image_pixel",
                         choices=["image_pixel", "image_pixel_hmean", "image_only", "image_teacher"],
-                        help="Stage2 候选评分目标")
+                        help="Stage2 candidate scoring objective")
     parser.add_argument("--stage2_weight_image", type=float, default=0.3,
-                        help="image_pixel 目标中 image AUROC 的权重")
+                        help="Weight on image AUROC within the image_pixel objective")
     parser.add_argument("--stage2_weight_pixel_ap", type=float, default=0.5,
-                        help="image_pixel 目标中 pixel AP 的权重")
+                        help="Weight on pixel AP within the image_pixel objective")
     parser.add_argument("--stage2_weight_pixel_f1", type=float, default=0.2,
-                        help="image_pixel 目标中 pixel F1max 的权重")
+                        help="Weight on pixel F1max within the image_pixel objective")
     parser.add_argument("--stage2_metric_resolution", type=int, default=256,
-                        help="Stage2 像素指标评估分辨率")
+                        help="Resolution at which Stage2 pixel metrics are evaluated")
     parser.add_argument("--pixel_layer_weights", type=float, nargs=4, default=[1, 1, 1, 1],
-                        help="像素层融合权重，长度应与 patch feature 层数一致")
+                        help="Per-layer pixel fusion weights; length must match the number of patch feature layers")
     parser.add_argument("--stage2_rerank_topk", type=int, default=8,
-                        help="最终按 mean IoU 重排的候选数")
+                        help="Number of candidates reranked by mean IoU at the end")
     parser.add_argument("--stage2_stability_bootstrap", type=int, default=3,
-                        help="Stage2 稳定性 bootstrap 次数")
+                        help="Number of bootstrap rounds for Stage2 stability")
     parser.add_argument("--stage2_stability_weight", type=float, default=0.1,
-                        help="Stage2 稳定性正则权重")
+                        help="Weight of the Stage2 stability regularizer")
     parser.add_argument("--stage2_split", type=str, default="test",
                         help="Data split for Stage2 prompt search (train/val/test). "
                              "Default 'test' uses source domain test split (source-supervised).")
@@ -3735,7 +3735,7 @@ def build_parser():
 
 
 def main(args=None):
-    """入口。支持接收外部 args（供 train_two_stage.py 分流调用）。"""
+    """Entry point. Accepts externally supplied args (used when train_two_stage.py dispatches here)."""
     if args is None:
         parser = build_parser()
         args = parser.parse_args()
