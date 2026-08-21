@@ -231,7 +231,7 @@ CoEvoAD is evaluated under strict cross-dataset transfer: the scorer is trained 
 
 Anomaly maps on MVTec-AD and VisA categories, compared with ground truth and baseline methods:
 
-![qualitative](figures/qualitative_comparison.png)
+![qualitative](figures/qualitative_comparison.jpg)
 
 To dump such maps from your own runs, add `--save_visualizations` to either test command — input, anomaly map, and overlay are written under `<save_path>/imgs` (`--visualization_limit_per_class N` caps the number per category).
 
