@@ -4,6 +4,8 @@
 >
 > Official implementation. A paper link will be added once the ACL Anthology version is online.
 
+![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Python 3.9](https://img.shields.io/badge/Python-3.9-blue.svg) ![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-orange.svg)
+
 ![framework](figures/overview.png)
 
 ## Table of Contents
@@ -23,6 +25,7 @@
 
 ## Updates
 
+- **2026-08**: Entrypoints reorganized — `test_universal.py` is now the paper-mainline evaluation (formerly `test_universal_supp.py`), and `test_strict.py` runs the strict control rows. Source-only validation is now the training default.
 - **2026-08**: Code released.
 - **2026-08**: The paper is accepted to **EMNLP 2026** (main conference).
 
