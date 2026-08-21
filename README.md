@@ -223,9 +223,7 @@ Two environment variables affect evaluation. `COEVOAD_TEST_ROUTE_PROFILE` select
 
 CoEvoAD is evaluated under strict cross-dataset transfer: the scorer is trained on a source dataset and evaluated on target datasets without target-domain images, labels, or supervision. The two primary transfer directions are VisA → MVTec-AD and MVTec-AD → VisA; BTAD, KSDD2, DAGM, and RSDD serve as external industrial targets under the same source-only protocol. Baseline numbers are taken from the original papers or their official codebases where available.
 
-![image-level results](figures/table1_image_level.png)
-
-![pixel-level results](figures/table2_pixel_level.png)
+![main results](figures/main_results.png)
 
 ## Visualization
 
