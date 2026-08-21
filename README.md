@@ -1,6 +1,6 @@
 # CoEvoAD
 
-Official implementation of **"Co-Evolutionary Prompt Optimization with Cross-Category Transfer for Zero-Shot Anomaly Detection"**.
+Official implementation of **"Co-Evolutionary Prompt Optimization with Cross-Category Transfer for Zero-Shot Anomaly Detection"** (EMNLP 2026).
 
 CoEvoAD searches for interpretable anomaly-detection rules directly in discrete natural language, using a role-separated co-evolutionary search over normal/abnormal prompt populations. Candidate rules are selected by a **Cross-Category Transfer Objective (CCTO)**, which scores each candidate by held-out performance across *source* categories only. No target-domain image, label, or metric is used at any point before final evaluation.
 
@@ -138,9 +138,9 @@ For the reverse direction (MVTec → VisA), swap `visa` and `mvtec` in the comma
 
 ## Download Weights
 
-Pretrained checkpoints and searched rule caches: **[Google Drive](<GOOGLE_DRIVE_LINK>)**
+Pretrained checkpoints and searched rule caches will be released here shortly.
 
-Place them anywhere and pass the paths via `--checkpoint_path` and `--evo_rules_path`.
+Until then, everything can be reproduced from scratch with the commands above. Once released, place the files anywhere and pass their paths via `--checkpoint_path` and `--evo_rules_path`.
 
 ## Third-Party Code
 
@@ -152,10 +152,20 @@ This repository builds on the following MIT-licensed projects. Please comply wit
 
 ## About
 
-Questions and issues are welcome via GitHub Issues.
+Questions and issues are welcome via GitHub Issues, or contact 24281153@bjtu.edu.cn.
 
 If you find this work useful, please cite:
 
 ```bibtex
-<CITATION>
+@inproceedings{coevoad2026,
+  title     = {Co-Evolutionary Prompt Optimization with Cross-Category Transfer
+               for Zero-Shot Anomaly Detection},
+  author    = {TODO: camera-ready author list},
+  booktitle = {Proceedings of the 2026 Conference on Empirical Methods in
+               Natural Language Processing},
+  year      = {2026},
+}
 ```
+
+The entry above is a placeholder; it will be replaced once the paper appears in
+the ACL Anthology.
