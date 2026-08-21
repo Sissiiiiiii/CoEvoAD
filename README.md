@@ -72,7 +72,7 @@ python dataset/make_meta.py
 
 ## Train
 
-Two steps, both run on the **source** domain only.
+Two steps, both run on the **source** domain only. `bash train.sh visa` (or `bash train.sh mvtec`) runs both steps end-to-end with the settings below; the individual commands are:
 
 **Step 1 — prompt-bank training:**
 
@@ -132,7 +132,7 @@ There are two evaluation entrypoints:
 - `test_universal_supp.py` — enables the transfer routing used in the paper (semantic fallback + template transfer). **Use this to reproduce the main results.**
 - `test_universal.py` — strict mainline evaluation with transfer routing disabled, used for the control rows.
 
-`$CKPT` below is the checkpoint resolved in Step 1; re-run that `ls` snippet if you are in a new shell.
+`bash test.sh visa` (VisA → MVTec-AD) or `bash test.sh mvtec` (MVTec-AD → VisA) resolves the checkpoint and runs the command below. `$CKPT` is the checkpoint resolved in Step 1; re-run that `ls` snippet if you are in a new shell.
 
 ```bash
 python test_universal_supp.py \
