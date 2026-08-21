@@ -146,11 +146,11 @@ python train_two_stage.py \
 Key parameters:
 
 - `--dataset`: the source training dataset (`visa` or `mvtec`); the opposite dataset is the unseen target at test time.
-- `--source_only_validation`: validate on held-out source categories instead of the legacy cross-domain validation set. **Required — see the warning below.**
+- `--source_only_validation`: validate on held-out source categories. This is the default (the flag is kept explicit in the command); the legacy cross-domain behavior is behind `--legacy_cross_domain_validation` — see the warning below.
 - `--stage1_only`: stop after prompt-bank training; the rule search runs separately in Step 2.
 - `--eval_every`: run full validation every N epochs.
 
-> **`--source_only_validation` is required.** It is off by default, and without it validation runs on the *opposite* dataset — training on VisA validates on MVTec. Those target-domain metrics then drive best-checkpoint selection and early stopping, which breaks the zero-shot protocol this work is about.
+> **Source-only validation is the default.** Best-checkpoint selection and early stopping only ever see held-out source categories. The legacy upstream behavior — validating on the *opposite* dataset — is still available via `--legacy_cross_domain_validation`, but it lets target-domain metrics drive checkpoint selection, which breaks the zero-shot protocol this work is about; do not use it for reproduction.
 
 This writes a checkpoint into `./my_exps/train_visa/`. The filename is **either `stage1_final.pth` or `two_stage_final.pth`**: the training loop may internally switch from pixel-level to classification-head fine-tuning when pixel AP stalls, and the name reflects which phase it ended in. Both are valid inputs to the next step, so resolve it rather than hardcoding:
 
@@ -201,13 +201,13 @@ Evaluate zero-shot transfer to the unseen target domain. Rules and checkpoints c
 
 There are two evaluation entrypoints:
 
-- `test_universal_supp.py` — enables the transfer routing used in the paper (semantic fallback + template transfer). **Use this to reproduce the main results.**
-- `test_universal.py` — strict mainline evaluation with transfer routing disabled, used for the control rows.
+- `test_universal.py` — enables the transfer routing used in the paper (semantic fallback + template transfer). **Use this to reproduce the main results.**
+- `test_strict.py` — strict evaluation with transfer routing disabled, used for the control rows.
 
 `bash test.sh visa` (VisA → MVTec-AD) or `bash test.sh mvtec` (MVTec-AD → VisA) resolves the checkpoint and runs the command below. `$CKPT` is the checkpoint resolved in Step 1; re-run that `ls` snippet if you are in a new shell.
 
 ```bash
-python test_universal_supp.py \
+python test_universal.py \
   --dataset mvtec \
   --data_path ./dataset/mvisa/data \
   --checkpoint_path "$CKPT" \
@@ -229,6 +229,8 @@ Key parameters:
 - `--pixel_sigma`: Gaussian sigma for smoothing pixel-level anomaly maps.
 
 For the reverse direction (MVTec → VisA), swap `visa` and `mvtec` in the commands above.
+
+Two environment variables affect evaluation. `COEVOAD_TEST_ROUTE_PROFILE` selects the route profile and is set automatically by each entrypoint (`STRICT_MAINLINE` in `test_strict.py`, `SUPPLEMENTARY_FALLBACK` in `test_universal.py`), so you normally never set it by hand. `COEVO_DUMP_PER_IMAGE_SCORES=1` additionally saves per-image anomaly scores and labels to `per_image_scores_<dataset>.npz` under `--save_path`, for score-distribution figures.
 
 ## Main Results
 
