@@ -8,24 +8,8 @@
 
 ![framework](figures/overview.png)
 
-## Table of Contents
-
-* [📢 Updates](#updates)
-* [📖 Introduction](#introduction)
-* [🔧 Setup](#setup)
-* [📊 Dataset Preparation](#dataset-preparation)
-* [🚀 Train](#train)
-* [🧪 Test](#test)
-* [📈 Main Results](#main-results)
-* [🎨 Visualization](#visualization)
-* [⬇️ Download Weights](#download-weights)
-* [🙏 Acknowledgements](#acknowledgements)
-* [🔗 Citation](#citation)
-* [📜 License](#license)
-
 ## Updates
 
-- **2026-08**: Entrypoints reorganized — `test_universal.py` is now the paper-mainline evaluation (formerly `test_universal_supp.py`), and `test_strict.py` runs the strict control rows. Source-only validation is now the training default.
 - **2026-08**: Code released.
 - **2026-08**: The paper is accepted to **EMNLP 2026** (main conference).
 
