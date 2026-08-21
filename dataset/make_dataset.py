@@ -43,43 +43,43 @@ if __name__ == "__main__":
         {
             "name": "visa",
             "class": Visa_dataset,
-            "src": "/opt/data/private/zss/visa",
+            "src": "Path to your root/visa",
             "des": "./mvisa/data/visa"
         },
         {
             "name": "mvtec",
             "class": Mvtec_dataset,
-            "src": "/opt/data/private/zss/mvtec",
+            "src": "Path to your root/mvtec",
             "des": "./mvisa/data/mvtec"
         },
         {
             "name": "BTAD",
             "class": BTAD_dataset,
-            "src": "/opt/data/private/zss/BTech_Dataset_transformed",
+            "src": "Path to your root/BTech_Dataset_transformed",
             "des": "./mvisa/data/BTAD"
         },
         {
             "name": "KSDD2",
             "class": KSDD2_dataset,
-            "src": "/opt/data/private/zss/KSDD2",
+            "src": "Path to your root/KSDD2",
             "des": "./mvisa/data/KSDD2"
         },
         {
             "name": "RSDD",
             "class": RSDD_dataset,
-            "src": "/opt/data/private/zss/RSDD",
+            "src": "Path to your root/RSDD",
             "des": "./mvisa/data/RSDD"
         },
         {
             "name": "DAGM",
             "class": DAGM_dataset,
-            "src": "/opt/data/private/zss/DAGM2007",
+            "src": "Path to your root/DAGM2007",
             "des": "./mvisa/data/DAGM"
         },
         {
             "name": "DTD",
             "class": DTD_dataset,
-            "src": "/opt/data/private/zss/DTDSynthetic",  # From AdaCLIP
+            "src": "Path to your root/DTDSynthetic",  # From AdaCLIP
             "des": "./mvisa/data/DTD"
         },
         # {
