@@ -246,6 +246,8 @@ Anomaly maps on MVTec-AD and VisA categories, compared with ground truth and bas
 
 ![qualitative](figures/qualitative_comparison.png)
 
+To dump such maps from your own runs, add `--save_visualizations` to either test command — input, anomaly map, and overlay are written under `<save_path>/imgs` (`--visualization_limit_per_class N` caps the number per category).
+
 ## Download Weights
 
 Pretrained checkpoints and searched rule caches will be released here shortly.
