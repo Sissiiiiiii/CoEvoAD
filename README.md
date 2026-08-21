@@ -17,7 +17,7 @@
 * [📈 Main Results](#main-results)
 * [🎨 Visualization](#visualization)
 * [⬇️ Download Weights](#download-weights)
-* [🙏 Third-Party Code](#third-party-code)
+* [🙏 Acknowledgements](#acknowledgements)
 * [🔗 Citation](#citation)
 * [📜 License](#license)
 
@@ -272,7 +272,7 @@ Pretrained checkpoints and searched rule caches will be released here shortly.
 
 Until then, everything can be reproduced from scratch with the commands above. Once released, place the files anywhere and pass their paths via `--checkpoint_path` and `--evo_rules_path`.
 
-## Third-Party Code
+## Acknowledgements
 
 This repository builds on the following MIT-licensed projects. Please comply with their original licenses.
 
