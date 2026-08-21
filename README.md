@@ -234,31 +234,11 @@ Two environment variables affect evaluation. `COEVOAD_TEST_ROUTE_PROFILE` select
 
 ## Main Results
 
-CoEvoAD is evaluated under strict cross-dataset transfer: the scorer is trained on a source dataset and evaluated on target datasets without target-domain images, labels, or supervision. The two primary transfer directions are VisA → MVTec-AD and MVTec-AD → VisA; BTAD, KSDD2, DAGM, and RSDD serve as external industrial targets under the same source-only protocol. Numbers below are from the paper; baseline numbers are taken from the original papers or their official codebases where available. Bold marks the best result, and "--" marks entries not reported by the original paper.
+CoEvoAD is evaluated under strict cross-dataset transfer: the scorer is trained on a source dataset and evaluated on target datasets without target-domain images, labels, or supervision. The two primary transfer directions are VisA → MVTec-AD and MVTec-AD → VisA; BTAD, KSDD2, DAGM, and RSDD serve as external industrial targets under the same source-only protocol. Baseline numbers are taken from the original papers or their official codebases where available.
 
-**Image-level comparison (AUROC / AP, %):**
+![image-level results](figures/table1_image_level.png)
 
-| Dataset | WinCLIP (CVPR'23) | AnomalyCLIP (ICLR'24) | AdaCLIP (ECCV'24) | Bayes-PFL (CVPR'25) | MRAD (ICLR'26) | CoEvoAD (Ours) |
-|---|---|---|---|---|---|---|
-| MVTec-AD | 91.8 / 95.1 | 91.5 / 96.2 | 92.0 / 96.4 | 92.3 / 96.7 | **94.0** / **97.4** | 93.4 / 96.8 |
-| VisA | 78.1 / 77.5 | 82.1 / 85.4 | 83.0 / 84.9 | 87.0 / 89.2 | 85.7 / 88.3 | **87.4** / **89.7** |
-| BTAD | 83.3 / 84.1 | 89.1 / 91.1 | 91.6 / 92.4 | 93.2 / **96.5** | 92.4 / 94.2 | **94.4** / 96.1 |
-| KSDD2 | 93.5 / 77.9 | 92.1 / 77.8 | 95.9 / 95.9 | 97.3 / 97.9 | 95.1 / 88.9 | **97.4** / **97.9** |
-| DAGM | 89.6 / 90.4 | 95.6 / 94.6 | 96.5 / 95.7 | 97.7 / 97.0 | **98.4** / **98.6** | 98.2 / 97.6 |
-| RSDD | 85.3 / 65.3 | 73.5 / 55.0 | 89.1 / 70.8 | 94.1 / 92.3 | -- / -- | **98.9** / **98.9** |
-| **Mean** | 86.9 / 81.7 | 87.3 / 83.4 | 91.4 / 89.4 | 93.6 / 94.9 | -- / -- | **95.0** / **96.2** |
-
-**Pixel-level comparison (AUROC / PRO, %):**
-
-| Dataset | WinCLIP (CVPR'23) | AnomalyCLIP (ICLR'24) | AdaCLIP (ECCV'24) | Bayes-PFL (CVPR'25) | MRAD (ICLR'26) | CoEvoAD (Ours) |
-|---|---|---|---|---|---|---|
-| MVTec-AD | 85.1 / 64.6 | 91.1 / 81.4 | 86.8 / 33.8 | 91.8 / 87.4 | **93.0** / 86.8 | 92.2 / **87.9** |
-| VisA | 79.6 / 56.8 | 95.5 / 87.0 | 95.1 / 71.3 | 95.6 / 88.9 | **95.9** / 88.0 | 95.8 / **89.4** |
-| BTAD | 71.4 / 32.8 | 93.3 / 69.3 | 87.7 / 17.1 | 93.9 / 76.6 | **95.4** / 72.8 | 94.7 / **81.9** |
-| KSDD2 | 97.9 / 91.2 | 99.1 / 85.6 | 99.4 / 92.7 | 96.1 / 70.8 | 98.9 / 95.6 | **99.6** / **98.5** |
-| DAGM | 83.2 / 55.4 | 99.1 / 93.6 | 97.0 / 40.9 | 99.3 / 98.0 | 97.4 / 90.3 | **99.5** / **98.3** |
-| RSDD | 95.1 / 75.4 | 99.1 / 92.0 | 99.5 / 50.5 | 99.6 / 98.0 | -- / -- | **99.8** / **99.0** |
-| **Mean** | 85.4 / 62.7 | 96.2 / 84.8 | 94.3 / 51.1 | 96.1 / 86.6 | -- / -- | **96.9** / **92.5** |
+![pixel-level results](figures/table2_pixel_level.png)
 
 ## Visualization
 
