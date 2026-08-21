@@ -6,7 +6,7 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-green.svg) ![Python 3.9](https://img.shields.io/badge/Python-3.9-blue.svg) ![PyTorch](https://img.shields.io/badge/PyTorch-CUDA-orange.svg)
 
-![framework](figures/overview.png)
+![framework](figures/overview.webp)
 
 ## Updates
 
@@ -223,7 +223,9 @@ Two environment variables affect evaluation. `COEVOAD_TEST_ROUTE_PROFILE` select
 
 CoEvoAD is evaluated under strict cross-dataset transfer: the scorer is trained on a source dataset and evaluated on target datasets without target-domain images, labels, or supervision. The two primary transfer directions are VisA → MVTec-AD and MVTec-AD → VisA; BTAD, KSDD2, DAGM, and RSDD serve as external industrial targets under the same source-only protocol. Baseline numbers are taken from the original papers or their official codebases where available.
 
-![main results](figures/main_results.png)
+![image-level results](figures/table1_image_level.jpg)
+
+![pixel-level results](figures/table2_pixel_level.jpg)
 
 ## Visualization
 
