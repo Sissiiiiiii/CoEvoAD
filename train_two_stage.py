@@ -6,11 +6,10 @@ import random
 
 import numpy as np
 import torch
+from utils.common import setup_seed, setup_logger, _transform_test
 from torch import nn
 from tqdm import tqdm
 from transformers import get_cosine_schedule_with_warmup
-from torchvision.transforms import Compose, Resize, CenterCrop, ToTensor, Normalize
-from PIL import Image
 
 from datasets import Makedataset
 from loss import FocalLoss, DiceLoss, Orthogonal_Loss
@@ -20,37 +19,6 @@ from models.EMA import BestCheckpoint
 from models.model_CLIP import Load_CLIP, tokenize
 
 
-def _convert_image_to_rgb(image):
-    return image.convert("RGB")
-
-
-try:
-    from torchvision.transforms import InterpolationMode
-
-    BICUBIC = InterpolationMode.BICUBIC
-except ImportError:
-    BICUBIC = Image.BICUBIC
-
-
-def _transform_test(n_px):
-    return Compose(
-        [
-            Resize((n_px, n_px), interpolation=BICUBIC),
-            CenterCrop((n_px, n_px)),
-            _convert_image_to_rgb,
-            ToTensor(),
-            Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711)),
-        ]
-    )
-
-
-def setup_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
 
 
 def _checkpoint_state_dict(checkpoint):
@@ -92,28 +60,6 @@ def _maybe_enable_per_slot_mapping_from_checkpoint(args, checkpoint_path: str = 
     return False
 
 
-def setup_logger(save_path, log_filename="result_two_stage.txt"):
-    os.makedirs(save_path, exist_ok=True)
-    log_path = os.path.join(save_path, log_filename)
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-    root_logger.setLevel(logging.WARNING)
-
-    logger = logging.getLogger("train_two_stage")
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        "%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s",
-        datefmt="%y-%m-%d %H:%M:%S",
-    )
-    file_handler = logging.FileHandler(log_path, mode="a+")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    return logger
-
 
 class TwoStageTrainer:
     def __init__(self, args):
@@ -126,7 +72,7 @@ class TwoStageTrainer:
         args.text_width = model_configs["text_cfg"]["width"]
         args.embed_dim = model_configs["embed_dim"]
 
-        self.logger = setup_logger(args.save_path)
+        self.logger = setup_logger(args.save_path, "result_two_stage.txt", "train_two_stage")
         self._prompt_counter = 0  # round-robin prompt slot counter
         for arg in vars(args):
             self.logger.info(f"{arg}: {getattr(args, arg)}")
@@ -231,6 +177,12 @@ class TwoStageTrainer:
             val_dataset_name,
             val_product_list,
         )
+        if not getattr(self.args, "source_only_validation", True):
+            self.logger.warning(
+                "Legacy cross-domain validation is active: checkpoint selection and "
+                "early stopping will use target-domain metrics, which breaks the "
+                "strict zero-shot protocol. Use it only for legacy comparisons."
+            )
         val_dataloader, val_obj_list = self.make_dataset_val.mask_dataset(
             name=val_dataset_name,
             product_list=val_product_list,
@@ -588,8 +540,10 @@ if __name__ == "__main__":
     parser.add_argument("--stage2_only", action="store_true")
     parser.add_argument("--resume_stage2", action="store_true",
                         help="Load checkpoint and run only internal Stage 2 (fuse/image_mapping/class_mapping fine-tuning)")
-    parser.add_argument("--source_only_validation", action="store_true",
-                        help="Use fixed validation categories from the source dataset instead of the legacy cross-domain validation set")
+    parser.add_argument("--source_only_validation", action="store_true", default=True,
+                        help="(default) Validate on fixed held-out categories of the source dataset, keeping checkpoint selection and early stopping source-only")
+    parser.add_argument("--legacy_cross_domain_validation", dest="source_only_validation", action="store_false",
+                        help="Validate on the opposite dataset (legacy upstream behavior). WARNING: target-domain metrics then drive checkpoint selection and early stopping, which breaks the strict zero-shot protocol")
     parser.add_argument("--stage2_split", type=str, default="test",
                         help="Data split for Stage2 prompt search (train/val/test)")
     parser.add_argument("--allow_split_fallback", action="store_true",

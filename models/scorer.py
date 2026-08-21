@@ -813,23 +813,3 @@ def _build_custom_scorer(args, device: torch.device) -> AnomalyScorer:
 def _build_external_scorer(args, device: torch.device) -> AnomalyScorer:
     from models.external_scorer import build_external_scorer
     return build_external_scorer(args, device)
-
-
-def build_augmented_scorer(
-    base_scorer: AnomalyScorer,
-    proto_bank_path: str,
-    device: torch.device,
-    alpha_image: float = 0.3,
-    alpha_pixel: float = 0.5,
-    image_size: int = 518,
-) -> AnomalyScorer:
-    from models.prototype_bank import PrototypeAugmentedScorer, PrototypeBank
-
-    bank = PrototypeBank.load(proto_bank_path, device=device)
-    return PrototypeAugmentedScorer(
-        base_scorer=base_scorer,
-        prototype_bank=bank,
-        alpha_image=alpha_image,
-        alpha_pixel=alpha_pixel,
-        image_size=image_size,
-    )

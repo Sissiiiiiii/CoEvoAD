@@ -25,7 +25,7 @@ if [ -z "$CKPT" ]; then
 fi
 echo "Using checkpoint: $CKPT"
 
-python test_universal_supp.py \
+python test_universal.py \
   --dataset "$TARGET" \
   --data_path "$DATA_PATH" \
   --checkpoint_path "$CKPT" \

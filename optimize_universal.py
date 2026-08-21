@@ -38,11 +38,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+from utils.common import setup_seed, setup_logger, _transform_test
 import torch.nn.functional as F
 from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 from tqdm import tqdm
-from torchvision.transforms import CenterCrop, Compose, Normalize, Resize, ToTensor
-from PIL import Image
 
 from datasets import Makedataset
 from models.evoprompt import EvoPromptOptimizer
@@ -53,60 +52,6 @@ from utils.cuda_memory import log_cuda_peak_memory, reset_cuda_peak_memory
 # Points to the same named logger that setup_logger() configures, so handlers
 # attached there will pick up messages from here once setup_logger() has run.
 _module_logger = logging.getLogger("optimize_universal")
-
-try:
-    from torchvision.transforms import InterpolationMode
-    BICUBIC = InterpolationMode.BICUBIC
-except ImportError:
-    BICUBIC = Image.BICUBIC
-
-
-def _convert_image_to_rgb(image):
-    return image.convert("RGB")
-
-
-def _transform_test(n_px):
-    return Compose([
-        Resize((n_px, n_px), interpolation=BICUBIC),
-        CenterCrop((n_px, n_px)),
-        _convert_image_to_rgb,
-        ToTensor(),
-        Normalize((0.48145466, 0.4578275, 0.40821073),
-                  (0.26862954, 0.26130258, 0.27577711)),
-    ])
-
-
-def setup_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-def setup_logger(save_path, log_filename="result_universal_stage2.txt"):
-    os.makedirs(save_path, exist_ok=True)
-    log_path = os.path.join(save_path, log_filename)
-
-    root_logger = logging.getLogger()
-    for handler in root_logger.handlers[:]:
-        root_logger.removeHandler(handler)
-    root_logger.setLevel(logging.WARNING)
-
-    logger = logging.getLogger("optimize_universal")
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        "%(asctime)s.%(msecs)03d - %(levelname)s: %(message)s",
-        datefmt="%y-%m-%d %H:%M:%S",
-    )
-    file_handler = logging.FileHandler(log_path, mode="a+")
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-    return logger
 
 
 def _enforce_transfer_mainline(args, logger=None):
@@ -1842,83 +1787,6 @@ def _count_shared_alpha_cached_batches(
     return total_batches
 
 
-def _build_shared_prototype_bank_streaming(
-    make_dataset,
-    scorer,
-    args,
-    categories: List[str],
-    device: torch.device,
-    logger,
-):
-    """Build the shared prototype bank in a streaming fashion.
-
-    One category at a time:
-      - the DataLoader is forced single-process
-      - patch tokens are pushed into the reservoir right after scorer.prepare_images()
-      - when a category finishes it is merged into the global reservoir and its temporary GPU memory is freed
-    """
-    from models.prototype_bank import PrototypeBank, SharedPrototypeReservoirBuilder
-
-    builder = SharedPrototypeReservoirBuilder(
-        num_prototypes_normal=int(getattr(args, "shared_proto_num_normal", 128)),
-        num_prototypes_abnormal=int(getattr(args, "shared_proto_num_abnormal", 64)),
-        temperature=float(getattr(args, "proto_temperature", 20.0)),
-        topk_percent=float(getattr(args, "proto_topk_percent", 0.1)),
-        min_abnormal_patches=int(getattr(args, "proto_min_abnormal", 50)),
-        image_size=int(getattr(args, "image_size", 518)),
-        max_patches_per_category=int(getattr(args, "shared_proto_max_patches", 3000)),
-        max_patches_for_clustering=int(
-            getattr(args, "shared_proto_max_patches_for_clustering", 30000)
-        ),
-        seed=int(getattr(args, "seed", 0)),
-    )
-    metric_resolution = int(getattr(args, "stage2_metric_resolution", 256))
-
-    for cat_idx, category in enumerate(categories, start=1):
-        logger.info(
-            "  [%d/%d] Collecting shared bank patches for '%s'...",
-            cat_idx,
-            len(categories),
-            category,
-        )
-        dataloader = _build_shared_streaming_dataloader(
-            make_dataset=make_dataset,
-            args=args,
-            category=category,
-        )
-        batch_count = 0
-        for items in dataloader:
-            images = items["img"].to(device)
-            with torch.no_grad():
-                prepared = scorer.prepare_images(images)
-            patch_tokens = PrototypeBank._extract_patch_tokens(prepared)
-            labels = np.asarray(items["anomaly"]).reshape(-1).astype(np.int32)
-            pixel_masks = _resize_metric_mask(items.get("img_mask"), metric_resolution)
-            builder.ingest_batch(
-                patch_tokens_list=patch_tokens,
-                labels=labels,
-                pixel_masks=pixel_masks,
-            )
-            batch_count += 1
-            del prepared
-            del patch_tokens
-            del images
-
-        builder.finalize_category(category)
-        logger.info(
-            "  [%d/%d] %s: streamed %d batches into shared reservoirs",
-            cat_idx,
-            len(categories),
-            category,
-            batch_count,
-        )
-        del dataloader
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    return builder.build()
-
-
 # ---------------------------------------------------------------------------
 # eval_cache GPU memory management
 # ---------------------------------------------------------------------------
@@ -2518,250 +2386,12 @@ def _build_shared_bank(
 
 
 # ---------------------------------------------------------------------------
-# Prototype Bank integration helpers
-# ---------------------------------------------------------------------------
-
-def _build_prototype_augmented_scorer(
-    scorer,
-    full_eval_cache: List[Dict[str, Any]],
-    category: str,
-    args,
-    proto_banks_to_save: Dict[str, Any],
-    logger,
-):
-    """Build the prototype bank for the current category and wrap the scorer.
-
-    Returns (augmented_scorer, updated_proto_banks_to_save).
-    """
-    from models.prototype_bank import (
-        PrototypeAugmentedScorer,
-        PrototypeBank,
-    )
-
-    pixel_layer_weights = getattr(args, "pixel_layer_weights", None)
-
-    proto_bank = PrototypeBank(
-        num_prototypes_normal=int(getattr(args, "proto_num_normal", 32)),
-        num_prototypes_abnormal=int(getattr(args, "proto_num_abnormal", 16)),
-        temperature=float(getattr(args, "proto_temperature", 20.0)),
-        topk_percent=float(getattr(args, "proto_topk_percent", 0.1)),
-        min_abnormal_patches=int(getattr(args, "proto_min_abnormal", 50)),
-        pixel_layer_weights=pixel_layer_weights,
-        image_size=int(getattr(args, "image_size", 518)),
-    )
-
-    proto_bank.build_from_eval_cache(full_eval_cache)
-    if not proto_bank.prototypes:
-        logger.warning("  Prototype bank empty for '%s'; skipping augmentation", category)
-        return scorer, proto_banks_to_save
-
-    logger.info("  Prototype bank: %s", proto_bank.summary)
-
-    # determine alpha
-    alpha_mode = getattr(args, "proto_alpha_mode", "fixed")
-    if alpha_mode == "grid_search":
-        alpha_img, alpha_px = _grid_search_proto_alpha(
-            scorer, proto_bank, full_eval_cache, args, logger,
-        )
-        logger.info(
-            "  Grid search alpha: image=%.2f pixel=%.2f",
-            alpha_img, alpha_px,
-        )
-    else:
-        alpha_img = float(getattr(args, "proto_alpha_image", 0.3))
-        alpha_px = float(getattr(args, "proto_alpha_pixel", 0.5))
-
-    augmented = PrototypeAugmentedScorer(
-        base_scorer=scorer,
-        prototype_bank=proto_bank,
-        alpha_image=alpha_img,
-        alpha_pixel=alpha_px,
-        image_size=int(getattr(args, "image_size", 518)),
-    )
-
-    proto_banks_to_save[category] = (proto_bank, alpha_img, alpha_px)
-    return augmented, proto_banks_to_save
-
-
-def _grid_search_proto_alpha(
-    scorer,
-    proto_bank,
-    eval_cache: List[Dict[str, Any]],
-    args,
-    logger,
-) -> Tuple[float, float]:
-    """Grid-search the best fusion alpha on eval_cache."""
-    from models.prototype_bank import PrototypeAugmentedScorer
-
-    alpha_img_candidates = [0.1, 0.2, 0.3, 0.4, 0.5]
-    alpha_px_candidates = [0.1, 0.2, 0.3, 0.5, 0.7]
-
-    best_score = -1.0
-    best_alpha_img = float(getattr(args, "proto_alpha_image", 0.3))
-    best_alpha_px = float(getattr(args, "proto_alpha_pixel", 0.5))
-    base_prompt = "X object"
-    objective = getattr(args, "stage2_objective", "image_pixel")
-
-    for a_img in alpha_img_candidates:
-        for a_px in alpha_px_candidates:
-            aug = PrototypeAugmentedScorer(
-                base_scorer=scorer,
-                prototype_bank=proto_bank,
-                alpha_image=a_img,
-                alpha_pixel=a_px,
-                image_size=int(getattr(args, "image_size", 518)),
-            )
-            batch_outputs = _collect_candidate_outputs_on_cache(
-                scorer=aug,
-                optimizer=None,
-                eval_cache=eval_cache,
-                candidates=[base_prompt],
-                role="normal",
-                baseline=base_prompt,
-                args=args,
-                use_coevo=False,
-            )[0]
-            metrics = _compute_objective_metrics(batch_outputs, objective, args)
-            score = float(metrics.get("score", 0.0))
-            if score > best_score:
-                best_score = score
-                best_alpha_img = a_img
-                best_alpha_px = a_px
-
-    return best_alpha_img, best_alpha_px
-
-
-def _grid_search_shared_alpha(
-    scorer,
-    shared_bank,
-    make_dataset,
-    categories: List[str],
-    device: torch.device,
-    args,
-    logger,
-    max_batches: int = 8,
-) -> Tuple[float, float]:
-    """Grid-search the best fusion alpha for the shared prototype bank across all categories.
-
-    The objective is computed per category and then averaged across categories, which keeps the
-    peak memory of the shared alpha-search at the scale of a single category's 8 batches, instead
-    of concatenating the pixel maps of every category at once.
-    """
-    from models.prototype_bank import PrototypeAugmentedScorer
-    import gc
-
-    alpha_img_candidates = [0.1, 0.2, 0.3, 0.4, 0.5]
-    alpha_px_candidates = [0.1, 0.2, 0.3, 0.5, 0.7]
-
-    best_score = -1.0
-    best_alpha_img = float(getattr(args, "proto_alpha_image", 0.3))
-    best_alpha_px = float(getattr(args, "proto_alpha_pixel", 0.5))
-    objective = getattr(args, "stage2_objective", "image_pixel")
-    total_cached_batches = _count_shared_alpha_cached_batches(
-        make_dataset=make_dataset,
-        args=args,
-        categories=categories,
-        max_batches=max_batches,
-    )
-
-    logger.info(
-        "Grid searching shared bank alpha across %d categories using %d cached batches...",
-        len(categories),
-        total_cached_batches,
-    )
-
-    score_sums: Dict[Tuple[float, float], float] = {
-        (a_img, a_px): 0.0
-        for a_img in alpha_img_candidates
-        for a_px in alpha_px_candidates
-    }
-    score_counts: Dict[Tuple[float, float], int] = {
-        pair: 0 for pair in score_sums
-    }
-
-    for cat in categories:
-        cat_cache = _build_shared_alpha_eval_cache(
-            make_dataset=make_dataset,
-            scorer=scorer,
-            args=args,
-            category=cat,
-            device=device,
-            max_batches=max_batches,
-        )
-        logger.info(
-            "  %s: cached %d compact alpha-search batches on CPU",
-            cat,
-            len(cat_cache),
-        )
-        base_prompt = f"X {cat}"
-
-        for a_img in alpha_img_candidates:
-            for a_px in alpha_px_candidates:
-                cat_batch_outputs = None
-                aug = PrototypeAugmentedScorer(
-                    base_scorer=scorer,
-                    prototype_bank=shared_bank,
-                    alpha_image=a_img,
-                    alpha_pixel=a_px,
-                    image_size=int(getattr(args, "image_size", 518)),
-                )
-                _reload_eval_cache(cat_cache, device)
-                try:
-                    cat_batch_outputs = _collect_candidate_outputs_on_cache(
-                        scorer=aug,
-                        optimizer=None,
-                        eval_cache=cat_cache,
-                        candidates=[base_prompt],
-                        role="normal",
-                        baseline=base_prompt,
-                        args=args,
-                        use_coevo=False,
-                    )[0]
-                    cat_metrics = _compute_objective_metrics(
-                        cat_batch_outputs,
-                        objective,
-                        args,
-                    )
-                    key = (a_img, a_px)
-                    score_sums[key] += float(cat_metrics.get("score", 0.0))
-                    score_counts[key] += 1
-                finally:
-                    if cat_batch_outputs is not None:
-                        del cat_batch_outputs
-                    _offload_eval_cache(cat_cache)
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-
-        del cat_cache
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-    # NOTE: this uses a per-category mean rather than one metric over a global concatenation.
-    # It is semantically closer to a cross-class mean (matching shared bank _score_pool) and
-    # avoids concatenating the pixel maps of every category into memory at once.
-    for (a_img, a_px), score_sum in score_sums.items():
-        score = score_sum / max(1, score_counts[(a_img, a_px)])
-        if score > best_score:
-            best_score = score
-            best_alpha_img = a_img
-            best_alpha_px = a_px
-
-    logger.info(
-        "Shared bank grid search alpha: img=%.2f px=%.2f (score=%.4f)",
-        best_alpha_img, best_alpha_px, best_score,
-    )
-    return best_alpha_img, best_alpha_px
-
-
-# ---------------------------------------------------------------------------
 # Main optimization loop
 # ---------------------------------------------------------------------------
 
 def run_stage2_universal(args):
     os.makedirs(args.save_path, exist_ok=True)
-    logger = setup_logger(args.save_path)
+    logger = setup_logger(args.save_path, "result_universal_stage2.txt", "optimize_universal")
     _enforce_transfer_mainline(args, logger)
 
     _load_model_config(args)
@@ -2830,7 +2460,6 @@ def run_stage2_universal(args):
     # per-category optimization loop
     use_coevo = getattr(args, "use_coevo_prompt", False)
     optimized_rules = {"normal": {}, "abnormal": {}, "shared": {}}
-    proto_banks_to_save: Dict[str, Any] = {}  # {category: (bank, alpha_img, alpha_px)}
     partial_state = _load_stage2_partial_state(args.save_path)
     if partial_state["cache"] or any(partial_state["optimized_rules"].values()):
         _merge_stage2_recovered_state(optimized_rules, evo_optimizer, partial_state)
@@ -2872,80 +2501,6 @@ def run_stage2_universal(args):
         from models.qd_archive import QDArchive
         logger.info("QD archive enabled: bins=%d bd=%s", _qd_bins, _qd_bd_names)
 
-    # -- Shared prototype bank: built up front (one bank shared by all categories) --
-    shared_augmented_scorer = None
-    _use_shared_bank = (
-        getattr(args, "shared_prototype_bank", False)
-        and getattr(args, "enable_prototype_bank", False)
-    )
-
-    if _use_shared_bank:
-        logger.info("=" * 40)
-        logger.info("Building SHARED prototype bank from all %d categories...", len(all_obj_list))
-        logger.info("=" * 40)
-
-        shared_bank = _build_shared_prototype_bank_streaming(
-            make_dataset=make_dataset,
-            scorer=scorer,
-            args=args,
-            categories=all_obj_list,
-            device=device,
-            logger=logger,
-        )
-        shared_bank.to(device)
-        logger.info("Shared prototype bank moved to device: %s", device)
-
-        # Phase B: small alpha grid-search cache (the only prepared cache allowed to persist briefly across categories)
-        alpha_mode = getattr(args, "proto_alpha_mode", "fixed")
-        if alpha_mode == "grid_search":
-            logger.info("Building compact alpha-search caches (max 8 batches/category)...")
-            alpha_img, alpha_px = _grid_search_shared_alpha(
-                scorer=scorer,
-                shared_bank=shared_bank,
-                make_dataset=make_dataset,
-                categories=all_obj_list,
-                device=device,
-                args=args,
-                logger=logger,
-                max_batches=8,
-            )
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            logger.info("Released alpha-search caches after shared bank grid search")
-        else:
-            alpha_img = float(getattr(args, "proto_alpha_image", 0.3))
-            alpha_px = float(getattr(args, "proto_alpha_pixel", 0.5))
-
-        # Phase C: wrap into the augmented scorer
-        from models.prototype_bank import PrototypeAugmentedScorer
-        shared_augmented_scorer = PrototypeAugmentedScorer(
-            base_scorer=scorer,
-            prototype_bank=shared_bank,
-            alpha_image=alpha_img,
-            alpha_pixel=alpha_px,
-            image_size=int(getattr(args, "image_size", 518)),
-        )
-
-        # save the shared bank
-        shared_proto_path = os.path.join(args.save_path, "shared_prototype_bank.pt")
-        shared_bank.save(shared_proto_path)
-        shared_meta = {
-            "alpha_image": alpha_img,
-            "alpha_pixel": alpha_px,
-            "mode": "shared",
-            "source_categories": all_obj_list,
-            "num_prototypes_normal": int(getattr(args, "shared_proto_num_normal", 128)),
-            "num_prototypes_abnormal": int(getattr(args, "shared_proto_num_abnormal", 64)),
-            "max_patches_per_category": int(getattr(args, "shared_proto_max_patches", 3000)),
-            "max_patches_for_clustering": int(
-                getattr(args, "shared_proto_max_patches_for_clustering", 30000)
-            ),
-        }
-        shared_meta_path = os.path.join(args.save_path, "shared_prototype_bank_meta.json")
-        with open(shared_meta_path, "w", encoding="utf-8") as f:
-            json.dump(shared_meta, f, indent=2, ensure_ascii=False)
-        logger.info("Shared prototype bank saved: %s (alpha_img=%.2f, alpha_px=%.2f)",
-                     shared_proto_path, alpha_img, alpha_px)
 
     # -- CDACE: build the target-domain eval cache --
     cdace_target_cache = None
@@ -3142,19 +2697,7 @@ def run_stage2_universal(args):
                 category,
             )
 
-        # -- Prototype bank: build + optional alpha grid search + wrap the scorer --
         scorer_for_search = scorer
-        if shared_augmented_scorer is not None:
-            scorer_for_search = shared_augmented_scorer
-        elif getattr(args, "enable_prototype_bank", False):
-            scorer_for_search, proto_banks_to_save = _build_prototype_augmented_scorer(
-                scorer=scorer,
-                full_eval_cache=full_eval_cache,
-                category=category,
-                args=args,
-                proto_banks_to_save=proto_banks_to_save,
-                logger=logger,
-            )
 
         if use_coevo and args.evo_dual_branch:
             # CoEvo joint dual-branch optimization
@@ -3402,16 +2945,6 @@ def run_stage2_universal(args):
             _offload_eval_cache(_cc)
         ccto_per_cat_cache.clear()
         logger.info("CCTO: cross-category caches released")
-
-    # save prototype banks
-    if proto_banks_to_save:
-        proto_path = (
-            getattr(args, "proto_save_path", "") or
-            os.path.join(args.save_path, "prototype_bank.pt")
-        )
-        from models.prototype_bank import save_all_banks
-        save_all_banks(proto_banks_to_save, proto_path)
-        logger.info("Prototype banks saved: %s (%d categories)", proto_path, len(proto_banks_to_save))
 
     # save the rules
     rules_path = os.path.join(args.save_path, "optimized_prompt_rules.json")
@@ -3712,24 +3245,6 @@ def build_parser():
     # Device
     parser.add_argument("--device_id", type=int, default=0)
     parser.add_argument("--seed", type=int, default=111)
-
-    # [DEPRECATED] Prototype bank — abandoned (M2V auroc_sp -0.68).
-    # Args kept as hidden no-ops for backward compatibility with old scripts.
-    parser.add_argument("--enable_prototype_bank", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--shared_prototype_bank", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--proto_num_normal", type=int, default=32, help=argparse.SUPPRESS)
-    parser.add_argument("--proto_num_abnormal", type=int, default=16, help=argparse.SUPPRESS)
-    parser.add_argument("--proto_temperature", type=float, default=20.0, help=argparse.SUPPRESS)
-    parser.add_argument("--proto_topk_percent", type=float, default=0.1, help=argparse.SUPPRESS)
-    parser.add_argument("--proto_alpha_image", type=float, default=0.3, help=argparse.SUPPRESS)
-    parser.add_argument("--proto_alpha_pixel", type=float, default=0.5, help=argparse.SUPPRESS)
-    parser.add_argument("--proto_alpha_mode", type=str, default="fixed", help=argparse.SUPPRESS)
-    parser.add_argument("--proto_min_abnormal", type=int, default=50, help=argparse.SUPPRESS)
-    parser.add_argument("--proto_save_path", type=str, default="", help=argparse.SUPPRESS)
-    parser.add_argument("--shared_proto_num_normal", type=int, default=128, help=argparse.SUPPRESS)
-    parser.add_argument("--shared_proto_num_abnormal", type=int, default=64, help=argparse.SUPPRESS)
-    parser.add_argument("--shared_proto_max_patches", type=int, default=3000, help=argparse.SUPPRESS)
-    parser.add_argument("--shared_proto_max_patches_for_clustering", type=int, default=30000, help=argparse.SUPPRESS)
 
     return parser
 
