@@ -114,108 +114,49 @@ python dataset/make_meta.py
 
 ## Train
 
-Two steps, both run on the **source** domain only. `bash train.sh visa` (or `bash train.sh mvtec`) runs both steps end-to-end with the settings below; the individual commands are:
-
-**Step 1 — prompt-bank training:**
+Two steps, both run on the **source** domain only. The paper's frozen configuration is baked into [train.sh](train.sh), which runs them end-to-end:
 
 ```bash
-python train_two_stage.py \
-  --dataset visa \
-  --train_data_path ./dataset/mvisa/data \
-  --val_data_path ./dataset/mvisa/data \
-  --save_path ./my_exps/train_visa \
-  --prompt_num 3 --batch_size 32 --epochs 30 --eval_every 1 \
-  --image_size 518 --num_workers 4 \
-  --source_only_validation --stage1_only \
-  --seed 111 --device_id 0
+bash train.sh visa 0    # arguments: source dataset (visa | mvtec), GPU id
 ```
 
-Key parameters:
+**Step 1 — prompt-bank training** (`train_two_stage.py`) writes a checkpoint into `./my_exps/train_visa/`, named either `stage1_final.pth` or `two_stage_final.pth` depending on which internal phase the training loop ended in; the script resolves the name automatically.
 
-- `--dataset`: the source training dataset (`visa` or `mvtec`); the opposite dataset is the unseen target at test time.
-- `--source_only_validation`: validate on held-out source categories. This is the default (the flag is kept explicit in the command); the legacy cross-domain behavior is behind `--legacy_cross_domain_validation` — see the warning below.
-- `--stage1_only`: stop after prompt-bank training; the rule search runs separately in Step 2.
-- `--eval_every`: run full validation every N epochs.
+**Step 2 — co-evolutionary rule search** (`optimize_universal.py`) loads that frozen checkpoint, searches discrete prompt rules under CCTO, and writes them to `./my_exps/coevo_visa/evo_prompt_cache.json`.
 
-> **Source-only validation is the default.** Best-checkpoint selection and early stopping only ever see held-out source categories. The legacy upstream behavior — validating on the *opposite* dataset — is still available via `--legacy_cross_domain_validation`, but it lets target-domain metrics drive checkpoint selection, which breaks the zero-shot protocol this work is about; do not use it for reproduction.
+Key settings already baked into the script:
 
-This writes a checkpoint into `./my_exps/train_visa/`. The filename is **either `stage1_final.pth` or `two_stage_final.pth`**: the training loop may internally switch from pixel-level to classification-head fine-tuning when pixel AP stalls, and the name reflects which phase it ended in. Both are valid inputs to the next step, so resolve it rather than hardcoding:
-
-```bash
-CKPT=$(ls ./my_exps/train_visa/two_stage_final.pth \
-          ./my_exps/train_visa/stage1_final.pth 2>/dev/null | head -1)
-echo "$CKPT"
-```
-
-**Step 2 — co-evolutionary rule search (CCTO):**
-
-```bash
-python optimize_universal.py \
-  --dataset visa \
-  --checkpoint_path "$CKPT" \
-  --save_path ./my_exps/coevo_visa \
-  --train_data_path ./dataset/mvisa/data \
-  --stage2_only --stage2_split test --allow_split_fallback \
-  --prompt_num 3 --batch_size 2 --num_workers 0 --image_size 518 \
-  --evo_population 16 --evo_generations 5 --evo_topk 4 \
-  --evo_dual_branch --evo_val_batches 5 --candidate_batch_size 1 \
-  --use_coevo_prompt --coevo_pair_k 3 \
-  --coevo_alpha_auroc 0.85 --coevo_beta_contrast 0.15 \
-  --scorer_type prompt_bank \
-  --ccto --ccto_alpha 0.6 --ccto_scope symmetric \
-  --ccto_batches 20 --ccto_cross_agg bottomk --ccto_bottomk 3 \
-  --asym_b_enable \
-  --asym_b_lambda_normal_gen 0.35 --asym_b_lambda_abn_spec 0.20 \
-  --stage2_weight_image 0.4 --stage2_weight_pixel_ap 0.3 --stage2_weight_pixel_f1 0.3 \
-  --seed 111 --no_game_metrics --device_id 0
-```
-
-Key parameters:
-
-- `--stage2_only`: skip scorer training and run only the rule search on the frozen checkpoint from Step 1.
+- `--source_only_validation`: validate on held-out source categories — see the warning below.
 - `--evo_population`, `--evo_generations`, `--evo_topk`: population size N, search generations G, and elites carried per generation.
 - `--use_coevo_prompt`, `--coevo_pair_k`: role-separated co-evolution over normal/abnormal rule populations, with K sampled partners when scoring rule pairs.
-- `--ccto`: enable the Cross-Category Transfer Objective (held-out source categories as proxies for unseen categories).
-- `--ccto_alpha`: own-category weight in the CCTO fitness (cross-category weight is 1 − α).
+- `--ccto`, `--ccto_alpha`: the Cross-Category Transfer Objective (held-out source categories as proxies for unseen categories), with own-category weight α (cross-category weight 1 − α).
 - `--ccto_cross_agg bottomk`, `--ccto_bottomk`: aggregate cross-category scores by averaging the k lowest-scoring held-out categories.
-- `--ccto_batches`: max eval batches per held-out category (keeps the search tractable).
 
-This writes the searched rules to `./my_exps/coevo_visa/evo_prompt_cache.json`.
+To deviate from the paper configuration, edit the full `python` commands inside `train.sh`.
+
+> **Source-only validation is the default.** Best-checkpoint selection and early stopping only ever see held-out source categories. The legacy upstream behavior — validating on the *opposite* dataset — is still available via `--legacy_cross_domain_validation`, but it lets target-domain metrics drive checkpoint selection, which breaks the zero-shot protocol this work is about; do not use it for reproduction.
 
 ## Test
 
 Evaluate zero-shot transfer to the unseen target domain. Rules and checkpoints come from the source domain; target labels are used only to compute the final metrics.
 
-There are two evaluation entrypoints:
+```bash
+bash test.sh visa 0     # VisA -> MVTec-AD; use `bash test.sh mvtec` for the reverse direction
+```
+
+The script resolves the Step-1 checkpoint automatically and calls `test_universal.py`, one of two evaluation entrypoints:
 
 - `test_universal.py` — enables the transfer routing used in the paper (semantic fallback + template transfer). **Use this to reproduce the main results.**
 - `test_strict.py` — strict evaluation with transfer routing disabled, used for the control rows.
 
-`bash test.sh visa` (VisA → MVTec-AD) or `bash test.sh mvtec` (MVTec-AD → VisA) resolves the checkpoint and runs the command below. `$CKPT` is the checkpoint resolved in Step 1; re-run that `ls` snippet if you are in a new shell.
+Key settings already baked into the script:
 
-```bash
-python test_universal.py \
-  --dataset mvtec \
-  --data_path ./dataset/mvisa/data \
-  --checkpoint_path "$CKPT" \
-  --evo_rules_path ./my_exps/coevo_visa/evo_prompt_cache.json \
-  --save_path ./results/coevo_visa2mvtec \
-  --scorer_type prompt_bank --evo_dual_branch \
-  --prompt_num 3 --image_size 518 --pixel_sigma 8 --upsample_mode bilinear \
-  --enable_semantic_fallback --semantic_fallback_min_sim 0.45 --semantic_fallback_min_margin 0.00 \
-  --enable_template_transfer \
-  --seed 111 --device_id 0
-```
-
-Key parameters:
-
-- `--dataset`: the target dataset to evaluate (the opposite of the training source).
-- `--evo_rules_path`: the rule cache written by Step 2.
+- `--evo_rules_path`: the rule cache written by the train step.
 - `--enable_semantic_fallback`, `--semantic_fallback_min_sim`, `--semantic_fallback_min_margin`: frozen source-only semantic routing for unseen category names, with its cosine-similarity and margin thresholds.
 - `--enable_template_transfer`: template-transfer routing for categories without a semantic match.
 - `--pixel_sigma`: Gaussian sigma for smoothing pixel-level anomaly maps.
 
-For the reverse direction (MVTec → VisA), swap `visa` and `mvtec` in the commands above.
+Any further arguments after the first two are forwarded to `test_universal.py` (e.g. `bash test.sh visa 0 --save_visualizations`).
 
 Two environment variables affect evaluation. `COEVOAD_TEST_ROUTE_PROFILE` selects the route profile and is set automatically by each entrypoint (`STRICT_MAINLINE` in `test_strict.py`, `SUPPLEMENTARY_FALLBACK` in `test_universal.py`), so you normally never set it by hand. `COEVO_DUMP_PER_IMAGE_SCORES=1` additionally saves per-image anomaly scores and labels to `per_image_scores_<dataset>.npz` under `--save_path`, for score-distribution figures.
 

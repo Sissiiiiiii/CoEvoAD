@@ -35,4 +35,4 @@ python test_universal.py \
   --prompt_num 3 --image_size 518 --pixel_sigma 8 --upsample_mode bilinear \
   --enable_semantic_fallback --semantic_fallback_min_sim 0.45 --semantic_fallback_min_margin 0.00 \
   --enable_template_transfer \
-  --seed 111 --device_id "$DEVICE"
+  --seed 111 --device_id "$DEVICE" "${@:3}"
